@@ -442,7 +442,7 @@ static unsigned int getAPChannelbyIWInfo(const char *ifname)
 	/* Example: /sys/kernel/debug/ieee80211/phy0/wil6210/freq
 	 * Freq = 60480
 	 */
-	r = f_read_string("/sys/kernel/debug/ieee80211/phy0/wil6210/freq", buf, sizeof(buf));
+	r = f_read_string("/sys/kernel/debug/ieee80211/phy2/wil6210/freq", buf, sizeof(buf));
 	if (r < strlen("Freq = xxxxx"))
 		return 0;
 
@@ -475,6 +475,31 @@ unsigned int getAPChannel(int unit)
 
 	return r;
 }
+
+#if defined(GTAXY16000)
+unsigned int getEDMGChannel(void)
+{
+	int edmg_channel = 0;
+	char cmd[sizeof("hostapd_cli -i XXXX status") + IFNAMSIZ];
+
+	/* Example:
+	 * / # hostapd_cli -i wlan0 status
+	 * state=ENABLED
+	 * phy=wlan0
+	 * freq=60480
+	 * ......
+	 * channel=2
+	 * edmg_enable=1
+	 * edmg_channel=10
+	 * ......
+	 */
+	snprintf(cmd, sizeof(cmd), "hostapd_cli -i %s status", get_wififname(WL_60G_BAND));
+	if (exec_and_parse(cmd, "edmg_channel", "%*[^=]=%d", 1, &edmg_channel))
+		edmg_channel = 0;
+
+	return edmg_channel;
+}
+#endif
 
 static int __getAPBitRate(const char *ifname, char *buf, size_t buf_len)
 {
@@ -534,10 +559,11 @@ static int __getAPBitRate(const char *ifname, char *buf, size_t buf_len)
 #if defined(RTCONFIG_WIGIG)
 static int __getAPBitRateIW(int band, const char *ifname, char *buf, size_t buf_len)
 {
-	int mcs;
-	char cmd[sizeof("iw phy XXX info") + IFNAMSIZ], *rate[] = {
-		"27.5", "385", "770", "962.5",							/* MCS0~3  Mb/s */
-		"1.155", "1.25125", "1.54", "1.925", "2.31", "2.5025", "3.08", "3.85", "4.62"	/* MCS4~12 Gb/s */
+	int ratio = 1, mcs, edmg_enable, edmg_channel;
+	char cmd[sizeof("hostapd_cli -i XXXX status") + IFNAMSIZ];
+	float rate[] = {
+		27.5, 385, 770, 962.5,						/* MCS0~3  Mb/s */
+		1.155, 1.25125, 1.54, 1.925, 2.31, 2.5025, 3.08, 3.85, 4.62	/* MCS4~12 Gb/s */
 	};
 
 	if (band < 0 || band >= WL_NR_BANDS || !ifname || *ifname == '\0' || !buf || !buf_len) {
@@ -588,9 +614,36 @@ static int __getAPBitRateIW(int band, const char *ifname, char *buf, size_t buf_
 	if (exec_and_parse(cmd, "MCS", "%*[^-]-%d", 1, &mcs))
 		mcs = 12;
 
+	if (mcs >= 12) {
+		/* Example:
+		 * /# hostapd_cli -i wlan0 status
+		 * state=ENABLED
+		 * phy=wlan0
+		 * freq=60480
+		 * ......
+		 * channel=2
+		 * edmg_enable=0
+		 * edmg_channel=0
+		 * ......
+		 */
+		snprintf(cmd, sizeof(cmd), "hostapd_cli -i %s status", get_wififname(WL_60G_BAND));
+		if (exec_and_parse(cmd, "edmg_enable", "%*[^=]=%d", 1, &edmg_enable))
+			edmg_enable = 0;
+		if (edmg_enable) {
+			if (exec_and_parse(cmd, "edmg_channel", "%*[^=]=%d", 1, &edmg_channel))
+				edmg_channel = 0;
+			if (edmg_channel >= 9 && edmg_channel <= 13)
+				ratio = 2;
+			else if (edmg_channel >= 17 && edmg_channel <= 20)
+				ratio = 3;
+			else if (edmg_channel >= 25 && edmg_channel <= 27)
+				ratio = 4;
+		}
+	}
+
 	*buf = '\0';
 	if (mcs >= 0 && mcs < ARRAY_SIZE(rate))
-		snprintf(buf, buf_len, "%s %s", rate[mcs], (mcs >= 4)? "Gb/s" : "Mb/s");
+		snprintf(buf, buf_len, "%.2f %s", ratio * rate[mcs], (mcs >= 4)? "Gb/s" : "Mb/s");
 
 	return 0;
 }
@@ -721,6 +774,19 @@ ej_wl_control_channel(int eid, webs_t wp, int argc, char_t **argv)
 	
         return ret;
 }
+
+#if defined(GTAXY16000)
+int
+ej_wl_edmg_channel(int eid, webs_t wp, int argc, char_t **argv)
+{
+        int ret = 0, edmg_channel;
+
+	edmg_channel = getEDMGChannel();
+	ret = websWrite(wp, "[\"%d\", \"%d\", \"%d\", \"%d\"]", 0, 0, 0, edmg_channel);
+
+        return ret;
+}
+#endif
 
 long getSTAConnTime(char *ifname, char *bssid)
 {
@@ -1085,7 +1151,11 @@ static int getSTAInfo(int unit, WIFI_STA_TABLE *sta_info)
 	unit_name = strdup(get_wifname(unit));
 	if (!unit_name)
 		return ret;
+#if defined(RTCONFIG_AMAS_WGN)  
+        wl_ifnames = strdup(get_all_lan_ifnames());
+#else
 	wl_ifnames = strdup(nvram_safe_get("lan_ifnames"));
+#endif	
 	if (!wl_ifnames) {
 		free(unit_name);
 		return ret;
@@ -1153,6 +1223,9 @@ ej_wl_status_2g(int eid, webs_t wp, int argc, char_t **argv)
 static int
 show_wliface_info(webs_t wp, int unit, char *ifname, char *op_mode)
 {
+#if defined(GTAXY16000)
+	unsigned int edmg_channel;
+#endif
 	int ret = 0;
 	FILE *fp;
 	unsigned char mac_addr[ETHER_ADDR_LEN];
@@ -1202,6 +1275,14 @@ show_wliface_info(webs_t wp, int unit, char *ifname, char *op_mode)
 	getVAPBitRate(unit, ifname, tmpstr, sizeof(tmpstr));
 	ret += websWrite(wp, "Bit Rate	: %s\n", tmpstr);
 	ret += websWrite(wp, "Channel		: %u\n", getAPChannel(unit));
+#if defined(GTAXY16000)
+	if (unit == WL_60G_BAND) {
+		edmg_channel = getEDMGChannel();
+		if (edmg_channel != 0) {
+			ret += websWrite(wp, "EDMG Channel	: %u\n", edmg_channel);
+		}
+	}
+#endif
 
 	return ret;
 }
@@ -1882,7 +1963,7 @@ static int wl_scan(int eid, webs_t wp, int argc, char_t **argv, int unit)
 
 	dbg("Please wait...");
 #if defined(RTCONFIG_QCA_LBD)
-	if (nvram_match("qca_lbd_enable", "1") && pids("lbd")) {
+	if (nvram_match("smart_connect_x", "1") && pids("lbd")) {
 		eval("rc", "rc_service", "stop_qca_lbd");
 		restart_lbd = 1;
 	}
@@ -2085,8 +2166,9 @@ bypass:
 	if (country_code == NULL || strlen(country_code) != 2) return retval;
 
 	//try getting channel list via wifi driver first
-#if defined(RTAC58U)
-	if (unit == 0 && !strncmp(nvram_safe_get("territory_code"), "CX", 2))
+#if defined(RTAC58U) || defined(RTAC59U)
+	if (unit == 0 && (!strncmp(nvram_safe_get("territory_code"), "CX/01", 5)
+		       || !strncmp(nvram_safe_get("territory_code"), "CX/05", 5)))
 		retval += websWrite(wp, "[1,2,3,4,5,6,7,8,9,10,11]");
 	else
 #endif
@@ -2221,7 +2303,7 @@ ej_wl_rate_5g_2(int eid, webs_t wp, int argc, char_t **argv)
 static struct nat_accel_kmod_s {
 	char *kmod_name;
 } nat_accel_kmod[] = {
-#if defined(RTCONFIG_SOC_IPQ8064) || defined(RTCONFIG_SOC_IPQ8074)
+#if defined(RTCONFIG_SOC_IPQ8064) || defined(RTCONFIG_SOC_IPQ8074) || defined (RTCONFIG_SOC_IPQ60XX)
 	{ "ecm" },
 #elif defined(RTCONFIG_SOC_QCA9557) || defined(RTCONFIG_QCA953X) || defined(RTCONFIG_QCA956X) || defined(RTCONFIG_QCN550X) || defined(RTCONFIG_SOC_IPQ40XX)
 	{ "shortcut_fe" },
@@ -2306,3 +2388,11 @@ ej_wl_auth_psta(int eid, webs_t wp, int argc, char_t **argv)
 	return retval;
 }
 #endif
+
+const char *syslog_msg_filter[] = {
+	"net_ratelimit",
+#if defined(RTCONFIG_SOC_IPQ8074)
+	"[AUTH] vap", "[MLME] vap", "[ASSOC] vap", "[INACT] vap", "LBDR ", "npu_corner", "apc_corner", "Sync active EEPROM set",
+#endif
+	NULL
+};

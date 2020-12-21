@@ -30,7 +30,7 @@
 
 var wl1_nmode_x = '<% nvram_get("wl1_nmode_x"); %>';
 var wl0_nmode_x = '<% nvram_get("wl0_nmode_x"); %>';
-if(wl_info.band5g_2_support){
+if(wl_info.band5g_2_support || wl_info.band6g_support){
 	var wl2_nmode_x = '<% nvram_get("wl2_nmode_x"); %>';
 }
 
@@ -82,8 +82,14 @@ function initial(){
 	if(!band5g_support || no5gmssid_support)
 		document.getElementById("guest_table5").style.display = "none";
 	
-	if(wl_info.band5g_2_support){
-		document.getElementById("wl_opt1").innerHTML = "5GHz-1";
+	if(wl_info.band5g_2_support || wl_info.band6g_support){
+		if(band6g_support){
+			document.getElementById("wl_opt1").innerHTML = "5 GHz";
+		}
+		else{
+			document.getElementById("wl_opt1").innerHTML = "5 GHz-1";
+		}
+		
 		document.getElementById("wl_opt2").style.display = "";
 		document.getElementById("guest_table5_2").style.display = "";
 	}
@@ -102,6 +108,7 @@ function initial(){
 	if(document.form.preferred_lang.value == "JP"){    //use unique font-family for JP
 		document.getElementById('2g_radio_hint').style.fontFamily = "MS UI Gothic,MS P Gothic";
 		document.getElementById('5g_radio_hint').style.fontFamily = "MS UI Gothic,MS P Gothic";
+		$("#faq_amazon").attr("href", "https://www.amazon.co.jp//gp/help/customer/display.html/?nodeId=GMPKVYDBR223TRPY");
 	}	
 	
 	if("<% get_parameter("af"); %>" == "wl_NOnly_note"){
@@ -131,7 +138,7 @@ function initial(){
 		$("#smart_home_0").show();
 		if(band5g_support)
 			$("#smart_home_1").show();
-		if(wl_info.band5g_2_support)
+		if(wl_info.band5g_2_support || wl_info.band6g_support)
 			$("#smart_home_2").show();
 	}
 
@@ -264,8 +271,6 @@ function gen_gntable_tr(unit, gn_array, slicesb){
 	
 	if(tmo_support)	//keep wlx.3 for usingg Passpoint
 		var gn_array_length = gn_array.length-1;
-	else if(Qcawifi_support && amesh_wgn_support)
-		var gn_array_length = gn_array.length-1;
         else
 		var gn_array_length = gn_array.length;
 
@@ -327,7 +332,7 @@ function gen_gntable_tr(unit, gn_array, slicesb){
 								captive_portal_used_wl_array[fbwifi_5g] = "Facebook Wi-Fi";
 							}
 						}
-						if(wl_info.band5g_2_support) {
+						if(wl_info.band5g_2_support || wl_info.band6g_support) {
 							var fbwifi_5g_2 = '<% nvram_get("fbwifi_5g_2"); %>';
 							if(fbwifi_5g_2 != "off") {
 								captive_portal_used_wl_array[fbwifi_5g_2] = "Facebook Wi-Fi";
@@ -399,14 +404,7 @@ function gen_gntable_tr(unit, gn_array, slicesb){
 						htmlcode += '<tfoot><tr rowspan="3"><td align="center"><span style="color:#FFCC00;">Used by ' + captive_portal_used_wl_array["wl" + unit_subunit] + '</span></td></tr></tfoot>';
 					}
 				}else{
-					if(amazon_wss_if_support){
-						htmlcode += '<tfoot>';
-						htmlcode += '<tr rowspan="3"><td align="center"><input type="button" class="button_gen" value="<#WLANConfig11b_WirelessCtrl_button1name#>" onclick="create_guest_unit('+ unit +','+ subunit +');"></td></tr>';
-						htmlcode += '<tr rowspan="3"><td align="center"><input type="button" class="button_gen" value="Amazon Wi-Fi Simple Setup" onclick="enable_amazon_wss('+ unit +','+ subunit +');"></td></tr>';/* untranslated */
-						htmlcode += '</tfoot>';
-					}
-					else
-						htmlcode += '<tfoot><tr rowspan="3"><td align="center"><input type="button" class="button_gen" value="<#WLANConfig11b_WirelessCtrl_button1name#>" onclick="create_guest_unit('+ unit +','+ subunit +');"></td></tr></tfoot>';
+					htmlcode += '<tfoot><tr rowspan="3"><td align="center"><input type="button" class="button_gen" value="<#WLANConfig11b_WirelessCtrl_button1name#>" onclick="create_guest_unit('+ unit +','+ subunit +');"></td></tr></tfoot>';
 				}
 
 				if(sw_mode != "3"){
@@ -428,8 +426,11 @@ function gen_gntable_tr(unit, gn_array, slicesb){
 				}
 			}
 			htmlcode += '</table>';
-			if(amazon_wss_if_support && amazon_wss_status){
-				htmlcode += '<div style="font-size:12px;font-weight:bolder;color:#FC0;position:absolute;text-align:center;width:100%;">Used by <br>Amazon Wi-Fi Simple Setup</div>';/* untranslated */
+			if(amazon_wss_if_support){
+				if(amazon_wss_status)
+					htmlcode += '<div style="font-size:12px;font-weight:bolder;color:#FC0;position:absolute;text-align:center;width:100%;">Used by <br>Amazon Wi-Fi Simple Setup</div>';/* untranslated */
+				else
+					htmlcode += '<div style="position:absolute;margin-top:10px;text-align:center;""><input type="button" class="button_gen" style="word-break:break-word;"value="<#WSS_setup#>" onclick="enable_amazon_wss('+ unit +','+ subunit +');"></div>';
 			}
 			if(lyra_hide_support){
 				if(i == "0")
@@ -485,7 +486,7 @@ function gen_gntable(){
 
 	if(gn_array_2g_tmp.length > 0){
 		htmlcode += '<table style="margin-left:20px;margin-top:25px;" width="95%" align="center" cellpadding="4" cellspacing="0" class="gninfo_head_table" id="gninfo_table_2g">';
-		htmlcode += '<tr id="2g_title"><td align="left" style="color:#5AD;font-size:16px; border-bottom:1px dashed #AAA;"><span>2.4GHz</span>';
+		htmlcode += '<tr id="2g_title"><td align="left" style="color:#5AD;font-size:16px; border-bottom:1px dashed #AAA;"><span>2.4 GHz</span>';
 		htmlcode += '<span id="2g_radio_hint" style="font-size: 14px;display:none;color:#FC0;margin-left:17px;">* <#GuestNetwork_Radio_Status#>	<a style="font-family:Lucida Console;color:#FC0;text-decoration:underline;cursor:pointer;" onclick="_change_wl_unit_status(0);"><#btn_go#></a></span></td></tr>';
 		while(gn_array_2g_tmp.length > 4){
 			htmlcode += '<tr><td>';
@@ -506,10 +507,16 @@ function gen_gntable(){
 	if(gn_array_5g_tmp.length > 0){
 		htmlcode5 += '<table style="margin-left:20px;margin-top:25px;" width="95%" align="center" cellpadding="4" cellspacing="0" class="gninfo_head_table" id="gninfo_table_5g">';
 		htmlcode5 += '<tr id="5g_title"><td align="left" style="color:#5AD; font-size:16px; border-bottom:1px dashed #AAA;">';
-		if(wl_info.band5g_2_support)
-			htmlcode5 += '<span>5GHz-1</span>';
+		if(wl_info.band5g_2_support || wl_info.band6g_support){
+			if(band6g_support){
+				htmlcode5 += '<span>5 GHz</span>';
+			}
+			else{
+				htmlcode5 += '<span>5 GHz-1</span>';
+			}
+		}			
 		else
-			htmlcode5 += '<span>5GHz</span>';
+			htmlcode5 += '<span>5 GHz</span>';
 		htmlcode5 += '<span id="5g_radio_hint" style="font-size: 14px;display:none;color:#FC0;margin-left:17px;">* <#GuestNetwork_Radio_Status#>	<a style="font-family:Lucida Console;color:#FC0;text-decoration:underline;cursor:pointer;" onclick="_change_wl_unit_status(1);"><#btn_go#></a></span></td></tr>';
 
 		while(gn_array_5g_tmp.length > 4){
@@ -528,9 +535,15 @@ function gen_gntable(){
 		check_bw_status(gn_array_5g_tmp);
 	}
 
-  	if(wl_info.band5g_2_support && gn_array_5g_2_tmp.length > 0){
+  	if((wl_info.band5g_2_support || wl_info.band6g_support)&& gn_array_5g_2_tmp.length > 0){
 		htmlcode5_2 += '<table style="margin-left:20px;margin-top:25px;" width="95%" align="center" cellpadding="4" cellspacing="0" class="gninfo_head_table" id="gninfo_table_5g_2">';
-		htmlcode5_2 += '<tr id="5g_2_title"><td align="left" style="color:#5AD; font-size:16px; border-bottom:1px dashed #AAA;"><span>5GHz-2</span>';
+		if(band6g_support){
+			htmlcode5_2 += '<tr id="5g_2_title"><td align="left" style="color:#5AD; font-size:16px; border-bottom:1px dashed #AAA;"><span>6 GHz</span>';
+		}
+		else{
+			htmlcode5_2 += '<tr id="5g_2_title"><td align="left" style="color:#5AD; font-size:16px; border-bottom:1px dashed #AAA;"><span>5 GHz-2</span>';
+		}
+		
 		htmlcode5_2 += '<span id="5g_2_radio_hint" style="font-size: 14px;display:none;color:#FC0;margin-left:17px;">* <#GuestNetwork_Radio_Status#>	<a style="font-family:Lucida Console;color:#FC0;text-decoration:underline;cursor:pointer;" onclick="_change_wl_unit_status(1);"><#btn_go#></a></span></td></tr>';
 		while(gn_array_5g_2_tmp.length > 4){
 			htmlcode5_2 += '<tr><td >';
@@ -550,7 +563,7 @@ function gen_gntable(){
 
 	if(wl_info.band60g_support) {
 		htmlcode60 += '<table style="margin-left:20px;margin-top:25px;" width="95%" align="center" cellpadding="4" cellspacing="0" class="gninfo_head_table" id="gninfo_table_60g">';
-		htmlcode60 += '<tr id="60g_title"><td align="left" style="color:#5AD; font-size:16px; border-bottom:1px dashed #AAA;"><span>60GHz</span></td></tr>';
+		htmlcode60 += '<tr id="60g_title"><td align="left" style="color:#5AD; font-size:16px; border-bottom:1px dashed #AAA;"><span>60 GHz</span></td></tr>';
 		htmlcode60 += '<tr><td><span style="font-size: 14px;color:#FC0;"><#CTL_nonsupported#></span></td></tr>';
 		htmlcode60 += '</table>';
 		document.getElementById("guest_table60").innerHTML = htmlcode60;
@@ -806,7 +819,7 @@ function guest_divctrl(flag){
 		if(band5g_support)
 			document.getElementById("guest_table5").style.display = "none";
 		
-		if(wl_info.band5g_2_support)
+		if(wl_info.band5g_2_support || wl_info.band6g_support)
 			document.getElementById("guest_table5_2").style.display = "none";
 
 		if(wl_info.band60g_support)
@@ -825,14 +838,14 @@ function guest_divctrl(flag){
 		document.getElementById("guest_table2").style.display = "";
 		if(!band5g_support || no5gmssid_support){
 			document.getElementById("guest_table5").style.display = "none";
-			if(!wl_info.band5g_2_support)
+			if(!wl_info.band5g_2_support && !wl_info.band6g_support)
 				document.getElementById("guest_table5_2").style.display = "none";
 		}
 		else{
 			document.getElementById("guest_table5").style.display = "";
 		}		
 		
-		if(wl_info.band5g_2_support)
+		if(wl_info.band5g_2_support || wl_info.band6g_support)
 			document.getElementById("guest_table5_2").style.display = "";
 
 		if(wl_info.band60g_support)
@@ -866,7 +879,7 @@ function mbss_display_ctrl(){
 		document.getElementById("guest_table2").style.display = "none";
 		if(band5g_support)
 			document.getElementById("guest_table5").style.display = "none";
-		if(wl_info.band5g_2_support)
+		if(wl_info.band5g_2_support || wl_info.band6g_support)
 			document.getElementById("guest_table5_2").style.display = "none";
 		if(wl_info.band60g_support)
 			document.getElementById("guest_table60").style.display = "none";
@@ -1001,7 +1014,8 @@ function change_guest_unit(_unit, _subunit){
 		inputCtrl(document.form.wl_lanaccess, 1);
 	}
 
-	if(amesh_support && amesh_wgn_support){
+	var interface_support =  decodeURIComponent(gn_array[idx][24]);
+	if(amesh_support && amesh_wgn_support && interface_support == "1"){
 		$("#aimesh_sync_field").show();
 		$("#aimesh_sync_field select[name='wl_sync_node']").attr("disabled", false);
 		if(gn_array[idx][23] == undefined || gn_array[idx][23] == "")
@@ -1289,10 +1303,10 @@ function show_bandwidth(flag){
 		}
 
 		if(QoS_enable_orig == "0"){
-			show_hint_content += "<br>QoS function of traffic manager will be enable and set as Bandwidth Limiter mode by default.";	/* untranslated */
+			show_hint_content += "<br><#Bandwidth_Limiter_NAT_hint#>";
 		}
 		else if(QoS_type_orig != "2"){
-			show_hint_content += "<br>QoS function of traffic manager will set as Bandwidth Limiter mode.";	/* untranslated */
+			show_hint_content += "<br><#Bandwidth_Limiter_set_hint#>";
 		}
 
 		if(show_hint_content.length <= 0){
@@ -1379,6 +1393,25 @@ function remove_amazon_wss(unit, subunit){
 	append_hidden_item("wl_bw_enabled", "0");
 	append_hidden_item("wl_bw_dl", "0");
 	append_hidden_item("wl_bw_ul", "0");
+	append_hidden_item("wl_closed", "0");
+	append_hidden_item("wl_ssid", "ASUS_Guest2");
+	append_hidden_item("wl_auth_mode_x", "open");
+	append_hidden_item("wl_wep_x", "0");
+	append_hidden_item("wl_expire", "0");
+	append_hidden_item("qos_enable", "0");
+	append_hidden_item("qos_type", "1");
+	append_hidden_item("wl_lanaccess", "off");
+	append_hidden_item("wl_macmode", "disabled");
+	append_hidden_item("wl_wpa_psk", "");
+	append_hidden_item("wl_crypto", "aes");
+	append_hidden_item("wl_phrase_x", "");
+	append_hidden_item("wl_key", "");
+	append_hidden_item("wl_key1", "");
+	append_hidden_item("wl_key2", "");
+	append_hidden_item("wl_key3", "");
+	append_hidden_item("wl_key4", "");
+	append_hidden_item("wl_mbss", "");
+
 	if (lantiq_support)
 		document.unitform.action_wait.value = "60"; // for extend the time to let Amazon WSS ebtable rule ready, or it will block all clients
 	close_guest_unit(unit, subunit);
@@ -1437,7 +1470,7 @@ function apply_amazon_wss(){
 <input type="hidden" name="gwlu" value="" disabled>
 <input type="hidden" name="modified" value="0">
 <input type="hidden" name="action_mode" value="apply_new">
-<input type="hidden" name="action_script" value="restart_wireless">
+<input type="hidden" name="action_script" value="restart_wireless;restart_firewall;">
 <input type="hidden" name="action_wait" value="15">
 <input type="hidden" name="preferred_lang" id="preferred_lang" value="<% nvram_get("preferred_lang"); %>">
 <input type="hidden" name="wl_country_code" value="<% nvram_get("wl0_country_code"); %>" disabled>
@@ -1536,7 +1569,7 @@ function apply_amazon_wss(){
 								<tr>
 									<td>
 										<span style="line-height:20px;"><#WSS_setup_desc0#></span>&nbsp;
-										<a style="color:#FC0;text-decoration:underline;cursor:pointer;" href="https://www.amazon.com/gp/help/customer/display.html/?nodeId=GMPKVYDBR223TRPY" target="_blank"><#Learn_more#></a>
+										<a id="faq_amazon" style="color:#FC0;text-decoration:underline;cursor:pointer;" href="https://www.amazon.com/gp/help/customer/display.html/?nodeId=GMPKVYDBR223TRPY" target="_blank"><#Learn_more#></a>
 										<br>
 										<span><#WSS_setup_desc1#></span>
 										<br>
@@ -1557,11 +1590,11 @@ function apply_amazon_wss(){
 								<th><#Interface#></th>
 								<td>
 									<select name="wl_unit" class="input_option" onChange="change_wl_unit();" style="display:none">
-										<option id="wl_opt0" class="content_input_fd" value="0" <% nvram_match("wl_unit", "0","selected"); %>>2.4GHz</option>
-										<option id="wl_opt1" class="content_input_fd" value="1" <% nvram_match("wl_unit", "1","selected"); %>>5GHz</option>
-										<option id="wl_opt2" class="content_input_fd" value="2" <% nvram_match("wl_unit", "2","selected"); %>>5GHz-2</option>
+										<option id="wl_opt0" class="content_input_fd" value="0" <% nvram_match("wl_unit", "0","selected"); %>>2.4 GHz</option>
+										<option id="wl_opt1" class="content_input_fd" value="1" <% nvram_match("wl_unit", "1","selected"); %>>5 GHz</option>
+										<option id="wl_opt2" class="content_input_fd" value="2" <% nvram_match("wl_unit", "2","selected"); %>>5 GHz-2</option>
 									</select>			
-									<p id="wl_ifname">2.4GHz</p>
+									<p id="wl_ifname">2.4 GHz</p>
 								</td>
 							</tr>
 							<tr style="display:none">

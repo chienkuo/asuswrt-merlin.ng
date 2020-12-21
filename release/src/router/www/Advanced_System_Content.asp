@@ -86,6 +86,50 @@
 	background: #78535b;
     border: 1px solid #f06767;
 }
+#NTPList_Block_PC{
+	border:1px outset #999;
+	background-color:#576D73;
+	position:absolute;
+	*margin-top:26px;	
+	margin-left:2px;
+	*margin-left:-353px;
+	width:346px;
+	text-align:left;	
+	height:auto;
+	overflow-y:auto;
+	z-index:200;
+	padding: 1px;
+	display:none;
+}
+#NTPList_Block_PC div{
+	background-color:#576D73;
+	height:auto;
+	*height:20px;
+	line-height:20px;
+	text-decoration:none;
+	font-family: Lucida Console;
+	padding-left:2px;
+}
+
+#NTPList_Block_PC a{
+	background-color:#EFEFEF;
+	color:#FFF;
+	font-size:12px;
+	font-family:Arial, Helvetica, sans-serif;
+	text-decoration:none;	
+}
+#NTPList_Block_PC div:hover{
+	background-color:#3366FF;
+	color:#FFFFFF;
+	cursor:default;
+}
+#ntp_pull_arrow{
+        float:left;
+        cursor:pointer;
+        border:2px outset #EFEFEF;
+        background-color:#CCC;
+        padding:3px 2px 4px 0px;
+}
 </style>
 <script>
 time_day = uptimeStr.substring(5,7);//Mon, 01 Aug 2011 16:25:44 +0800(1467 secs since boot....
@@ -132,6 +176,10 @@ var uploaded_cert = false;
 
 var le_enable = '<% nvram_get("le_enable"); %>';
 var orig_http_enable = '<% nvram_get("http_enable"); %>';
+var captcha_support = isSupport("captcha");
+
+var tz_table = {}
+$.getJSON("http://nw-dlcdnet.asus.com/plugin/js/tz_db.json", function(data){tz_table = data;})
 
 function initial(){	
 	//parse nvram to array
@@ -157,6 +205,10 @@ function initial(){
 	httpApi.faqURL("1034294", function(url){document.getElementById("faq").href=url;});
 	httpApi.faqURL("1037370", function(url){document.getElementById("ntp_faq").href=url;});
 	show_http_clientlist();
+	showNTPList();
+	if(odmpid == "DSL-AX5400"){
+		document.getElementById("ntp_pull_arrow").style.display = "";
+	}
 	display_spec_IP(document.form.http_client.value);
 
 	if(reboot_schedule_support){
@@ -180,7 +232,7 @@ function initial(){
 
 	setInterval("corrected_timezone();", 5000);
 	load_timezones();
-	parse_dstoffset();
+	parse_dstoffset(dstoffset);
 	document.form.http_passwd2.value = "";
 	
 	if(svc_ready == "0")
@@ -205,52 +257,36 @@ function initial(){
 	if (lanport == '') lanport = '80';
 	change_url(lanport, 'http_lan')
 
-	if(wifi_tog_btn_support || wifi_hw_sw_support || sw_mode == 2 || sw_mode == 4){		// wifi_tog_btn && wifi_hw_sw && hide WPS button behavior under repeater mode
-			if(cfg_wps_btn_support){
-				document.getElementById('turn_WPS').style.display = "";
-				document.form.btn_ez_radiotoggle[1].disabled = true;
-				document.getElementById('turn_WiFi').style.display = "none";
-				document.getElementById('turn_WiFi_str').style.display = "none";
-				document.getElementById('turn_LED').style.display = "";
-				if(document.form.btn_ez_radiotoggle[2].checked == false)
-					document.form.btn_ez_radiotoggle[0].checked = true;
-			}
-			else{
-				document.form.btn_ez_radiotoggle[0].disabled = true;
-				document.form.btn_ez_radiotoggle[1].disabled = true;
-				document.form.btn_ez_radiotoggle[2].disabled = true;
-				document.getElementById('btn_ez_radiotoggle_tr').style.display = "none";
-			}
+	var WPSArray = ['WPS'];
+	var ez_mode = httpApi.nvramGet (['btn_ez_mode']).btn_ez_mode;
+	var ez_radiotoggle = httpApi.nvramGet (['btn_ez_radiotoggle']).btn_ez_radiotoggle;
+	if(!wifi_tog_btn_support && !wifi_hw_sw_support && sw_mode != 2 && sw_mode != 4){
+		WPSArray.push('WiFi');
 	}
-	else{
-			
-			document.getElementById('btn_ez_radiotoggle_tr').style.display = "";
-			if(cfg_wps_btn_support){
-				document.getElementById('turn_WPS').style.display = "";
-				document.getElementById('turn_WiFi').style.display = "";
-				document.getElementById('turn_LED').style.display = "";
-				if(document.form.btn_ez_radiotoggle[1].checked == false && document.form.btn_ez_radiotoggle[2].checked == false)
-					document.form.btn_ez_radiotoggle[0].checked = true;
-			}
-			else{
-				document.getElementById('turn_WPS').style.display = "";
-				document.getElementById('turn_WiFi').style.display = "";
-				document.getElementById('turn_LED').disabled = true;
-				document.getElementById('turn_LED').style.display = "none";
-				document.getElementById('turn_LED_str').style.display = "none";
-				if(document.form.btn_ez_radiotoggle[1].checked == false)
-					document.form.btn_ez_radiotoggle[0].checked = true;
-			}
+
+	if(cfg_wps_btn_support){
+		WPSArray.push('LED');
+	}
+
+	if(WPSArray.length > 1){
+		$('#btn_ez_radiotoggle_tr').show();
+		for(i=0;i<WPSArray.length;i++){
+			$('#btn_ez_' + WPSArray[i]).show();
+		}
+
+		if(ez_radiotoggle == '1' && ez_mode == '0'){	// WiFi
+			document.form.btn_ez_radiotoggle[1].checked = true;
+		}
+		else if(ez_radiotoggle == '0' && ez_mode == '1'){	// LED
+			document.form.btn_ez_radiotoggle[2].checked = true;
+		}
+		else{	// WPS
+			document.form.btn_ez_radiotoggle[0].checked = true;
+		}
 	}
 
 	/* MODELDEP */
-	if(based_modelid == "GT-AC2900"){	//MODELDEP: AC2900(RT-AC86U)
-		document.form.btn_ez_radiotoggle[0].disabled = true;
-		document.form.btn_ez_radiotoggle[1].disabled = true;
-		document.form.btn_ez_radiotoggle[2].disabled = true;
-		document.getElementById('btn_ez_radiotoggle_tr').style.display = "none";
-	}
-	else if(wifison == 1){
+	if(wifison == 1){
 		if(sw_mode == 1 || (sw_mode == 3 && cfg_master == 1))
 			document.getElementById("sw_mode_radio_tr").style.display = "";
 		if(based_modelid == "MAP-AC2200")
@@ -307,15 +343,6 @@ function initial(){
 
 	// load shell_timeout_x
 	document.form.shell_timeout_x.value = orig_shell_timeout_x;
-	if(based_modelid == "GT-AXY16000" || based_modelid == "RT-AX89U"){
-		var pwrsave_desc = new Array();
-		var pwrsave_value = new Array();
-		pwrsave_desc = [ "<#Auto#>", "<#usb_Power_Save#>" ];
-		pwrsave_value = [1,2];
-		if(document.form.pwrsave_mode.value != '1' && document.form.pwrsave_mode.value != '2')
-			document.form.pwrsave_mode.value = '1';
-		add_options_x2(document.form.pwrsave_mode, pwrsave_desc, pwrsave_value, document.form.pwrsave_mode.value);
-	}
 
 	if(pwrsave_support){
 		document.getElementById("pwrsave_tr").style.display = "";
@@ -361,7 +388,9 @@ function initial(){
 		showhide("ntpd_redir_tr", 0);
 	}
 
-	$("#https_download_cert").css("display", (le_enable == "0" && orig_http_enable != "0")? "": "none");
+	$("#https_download_cert").css("display", (le_enable != "1" && orig_http_enable != "0")? "": "none");
+
+	$("#login_captcha_tr").css("display", captcha_support? "": "none");
 }
 
 var time_zone_tmp="";
@@ -511,7 +540,7 @@ function applyRule(){
 			}
 		}
 
-		if(document.form.ncb_enable_option.value != ncb_enable){
+		if(ncb_enable != "" && document.form.ncb_enable_option.value != ncb_enable){
 			document.form.ncb_enable.value = document.form.ncb_enable_option.value;
 			ncb_enable_option_flag = true;
 		}
@@ -524,17 +553,17 @@ function applyRule(){
 			sw_mode_radio_flag = true;
 		}
 
-		if(document.form.btn_ez_radiotoggle[1].disabled == false && document.form.btn_ez_radiotoggle[1].checked == true){
-				document.form.btn_ez_radiotoggle.value=1;
-				document.form.btn_ez_mode.value=0;
+		if(document.form.btn_ez_radiotoggle[1].checked){	// WiFi
+			document.form.btn_ez_radiotoggle.value = 1;
+			document.form.btn_ez_mode.value = 0;
 		}
-		else if(document.form.btn_ez_radiotoggle[2].disabled == false && document.form.btn_ez_radiotoggle[2].checked == true){
-				document.form.btn_ez_radiotoggle.value=0;
-				document.form.btn_ez_mode.value=1;
+		else if(document.form.btn_ez_radiotoggle[2].checked){	// LED
+			document.form.btn_ez_radiotoggle.value = 0;
+			document.form.btn_ez_mode.value = 1;
 		}
-		else{
-				document.form.btn_ez_radiotoggle.value=0;
-				document.form.btn_ez_mode.value=0;
+		else{	// WPS
+			document.form.btn_ez_radiotoggle.value = 0;
+			document.form.btn_ez_mode.value = 0;
 		}
 		
 		if(reboot_schedule_support){
@@ -767,9 +796,6 @@ function validForm(){
 			document.form.sshd_port.focus();
 			return false;
 		}
-		else{
-			document.form.sshd_port.disabled = false;
-		}
 	}
 	else{
 		document.form.sshd_port.disabled = true;
@@ -869,7 +895,7 @@ function validForm(){
 		}
 
 		if(WebUI_selected <= 0){
-			alert("Please select at least one Web UI of Access Type and enable it in [Allow only specified IP address]");   //Untranslated 2017/08
+			alert("<#JS_access_type#> <#System_login_specified_Iplist_enable#>");
 			document.form.http_client_ip_x_0.focus();
 			return false;
 		}
@@ -975,10 +1001,10 @@ var timezones = [
 	["UTC-5.45",	"(GMT+05:45) <#TZ57#>"],
 	["RFT-6",	"(GMT+06:00) <#TZ60#>"],
 	["UTC-6",	"(GMT+06:00) <#TZ58#>"],
-	["UTC-6_2",	"(GMT+06:00) <#TZ62_1#>"],
 	["UTC-6.30",	"(GMT+06:30) <#TZ61#>"],
 	["UTC-7",	"(GMT+07:00) <#TZ62#>"],
 	["UTC-7_2",	"(GMT+07:00) <#TZ63#>"],
+	["UTC-7_3",     "(GMT+07:00) <#TZ62_1#>"],      //UTC-6_2
 	["CST-8",	"(GMT+08:00) <#TZ64#>"],
 	["CST-8_1",	"(GMT+08:00) <#TZ65#>"],
 	["SST-8",	"(GMT+08:00) <#TZ66#>"],
@@ -1075,9 +1101,9 @@ var dst_hour = new Array("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
 var dstoff_start_m,dstoff_start_w,dstoff_start_d,dstoff_start_h;
 var dstoff_end_m,dstoff_end_w,dstoff_end_d,dstoff_end_h;
 
-function parse_dstoffset(){     //Mm.w.d/h,Mm.w.d/h
-	if(dstoffset){
-		var dstoffset_startend = dstoffset.split(",");
+function parse_dstoffset(_dstoffset){     //Mm.w.d/h,Mm.w.d/h
+	if(_dstoffset){
+		var dstoffset_startend = _dstoffset.split(",");
 			
 		if(dstoffset_startend[0] != "" && dstoffset_startend[0] != undefined){
 			var dstoffset_start = trim(dstoffset_startend[0]);
@@ -1165,7 +1191,7 @@ function hide_https_lanport(_value){
 	}
 
 
-	if(le_enable == "0" && _value != "0"){
+	if(le_enable != "1" && _value != "0"){
 		$("#https_download_cert").css("display", "");
 		if(orig_http_enable == "0"){
 			$("#download_cert_btn").css("display", "none");
@@ -1299,7 +1325,7 @@ function addRow(obj, upper){
 			access_type_value += parseInt($(this).val());
 	});	
 	if(access_type_value == 0) {
-		alert("Please select at least one Access Type.");/*untranslated*/
+		alert("<#JS_access_type#>");
 		return false;
 	}
 	else{
@@ -1436,7 +1462,7 @@ function change_url(num, flag){
 	else if(flag == 'https_wan'){
 		var https_wanport = num;
 		var host_addr = "";
-		if(ddns_enable_x == "1" && ddns_hostname_x_t.length != 0)
+		if(check_ddns_status())
 				host_addr = ddns_hostname_x_t;
 		else
 			host_addr = wan_ipaddr;
@@ -1468,6 +1494,13 @@ function select_time_zone(){
 			document.getElementById("dst_start").style.display="none";
 			document.getElementById("dst_end").style.display="none";
 	}
+
+	var getTimeZoneOffset = function(tz){
+		return tz_table[tz] ? tz_table[tz] : "M3.2.0/2,M11.1.0/2";
+	}
+
+	var dstOffset = getTimeZoneOffset(document.form.time_zone_select.value)
+	parse_dstoffset(dstOffset);
 }
 
 function clean_scorebar(obj){
@@ -1730,8 +1763,7 @@ function appendMonitorOption(obj){
 
 var isPingListOpen = 0;
 function showPingTargetList(){
-	var ttc = httpApi.nvramGet(["territory_code"]).territory_code;
-	if(ttc.search("CN") >= 0){
+	if(is_CN){
 		var APPListArray = [
 			["Baidu", "www.baidu.com"], ["QQ", "www.qq.com"], ["Taobao", "www.taobao.com"]
 		];
@@ -1830,6 +1862,46 @@ function myisPortConflict(_val, service){
 function save_cert_key(){
 	location.href = "cert.tar";
 }
+
+var NTPListArray = [
+		["time01.syd.optusnet.com.au", "time01.syd.optusnet.com.au"], ["time01.mel.optusnet.com.au", "time01.mel.optusnet.com.au"], 
+		["time02.mel.optusnet.com.au", "time02.mel.optusnet.com.au"], ["au.pool.ntp.org", "au.pool.ntp.org"],	["time.nist.gov", "time.nist.gov"],
+		["pool.ntp.org","pool.ntp.org"]
+	];
+
+function showNTPList(){
+	var code = "";
+	for(var i = 0; i < NTPListArray.length; i++){
+		code += '<a><div onmouseover="over_var=1;" onmouseout="over_var=0;" onclick="setNTP(\''+NTPListArray[i][1]+'\');"><strong>'+NTPListArray[i][0]+'</strong></div></a>';
+	}
+	code +='<!--[if lte IE 6.5]><iframe class="hackiframe2"></iframe><![endif]-->';	
+	document.getElementById("NTPList_Block_PC").innerHTML = code;
+}
+
+function setNTP(ntp_url){
+	document.form.ntp_server0.value = ntp_url;
+	hideNTP_Block();
+	over_var = 0;
+}
+
+var over_var = 0;
+var isMenuopen = 0;
+function hideNTP_Block(){
+	document.getElementById("ntp_pull_arrow").src = "/images/arrow-down.gif";
+	document.getElementById('NTPList_Block_PC').style.display='none';
+	isMenuopen = 0;
+}
+
+function pullNTPList(obj){
+	if(isMenuopen == 0){		
+		obj.src = "/images/arrow-top.gif"
+		document.getElementById("NTPList_Block_PC").style.display = 'block';		
+		document.form.ntp_server0.focus();		
+		isMenuopen = 1;
+	}
+	else
+		hideNTP_Block();
+}
 </script>
 </head>
 
@@ -1927,6 +1999,13 @@ function save_cert_key(){
 					
 					</td>
 				</tr>
+				<tr id="login_captcha_tr" style="display:none">
+					<th><a class="hintstyle" href="javascript:void(0);" onClick="openHint(11,13)">Enable Login Captcha</a></th>
+					<td>
+						<input type="radio" value="1" name="captcha_enable" <% nvram_match("captcha_enable", "1", "checked"); %>><#checkbox_Yes#>
+						<input type="radio" value="0" name="captcha_enable" <% nvram_match("captcha_enable", "0", "checked"); %>><#checkbox_No#>
+					</td>
+				</tr>
 			</table>
 			<table width="100%" border="1" align="center" cellpadding="4" cellspacing="0" bordercolor="#6b8fa3"  class="FormTable">
 				<thead>
@@ -1996,6 +2075,7 @@ function save_cert_key(){
 						</select>
 						<script>
 							var needReboot = false;
+
 
 							if (isSupport("usb3")) {
 								$("#reduce_usb3_tr").show();
@@ -2100,6 +2180,10 @@ function save_cert_key(){
 					<th><a class="hintstyle"  href="javascript:void(0);" onClick="openHint(11,3)"><#LANHostConfig_x_NTPServer_itemname#></a></th>
 					<td>
 						<input type="text" maxlength="255" class="input_32_table" name="ntp_server0" value="<% nvram_get("ntp_server0"); %>" onKeyPress="return validator.isString(this, event);" autocorrect="off" autocapitalize="off">
+						<img id="ntp_pull_arrow" height="14px;" src="/images/arrow-down.gif" style="position:absolute;*margin-left:-3px;*margin-top:1px;display:none;" onclick="pullNTPList(this);" title="<#LANHostConfig_x_NTPServer_itemname#>" onmouseover="over_var=1;" onmouseout="over_var=0;">
+						<div id="NTPList_Block_PC" class="NTPList_Block_PC"></div>
+						<br>
+
 						<a href="javascript:openLink('x_NTPServer1')"  name="x_NTPServer1_link" style=" margin-left:5px; text-decoration: underline;"><#LANHostConfig_x_NTPServer1_linkname#></a>
 						<div id="svc_hint_div" style="display:none;">
 							<span style="color:#FFCC00;"><#General_x_SystemTime_syncNTP#></span>
@@ -2162,12 +2246,18 @@ function save_cert_key(){
 					</td>
 				</tr>
 
-				<tr id="btn_ez_radiotoggle_tr">
+				<tr id="btn_ez_radiotoggle_tr" style="display: none;">
 					<th><#WPS_btn_behavior#></th>
 					<td>
-						<input type="radio" name="btn_ez_radiotoggle" id="turn_WPS" style="display:none;" value="0"><label for="turn_WPS"><#WPS_btn_actWPS#></label>
-						<input type="radio" name="btn_ez_radiotoggle" id="turn_WiFi" style="display:none;" value="1" <% nvram_match_x("", "btn_ez_radiotoggle", "1", "checked"); %>><label for="turn_WiFi" id="turn_WiFi_str"><#WPS_btn_toggle#></label>
-						<input type="radio" name="btn_ez_radiotoggle" id="turn_LED" style="display:none;" value="0" <% nvram_match_x("", "btn_ez_mode", "1", "checked"); %>><label for="turn_LED" id="turn_LED_str">Turn LED On/Off</label>
+						<label for="turn_WPS" id="btn_ez_WPS">
+							<input type="radio" name="btn_ez_radiotoggle" id="turn_WPS" class="input" value="0"><#WPS_btn_actWPS#>
+						</label>
+						<label for="turn_WiFi" id="btn_ez_WiFi" style="display:none;">
+							<input type="radio" name="btn_ez_radiotoggle" id="turn_WiFi" class="input" value="1"><#WPS_btn_toggle#>
+						</label>
+						<label for="turn_LED" id="btn_ez_LED" style="display:none;">
+							<input type="radio" name="btn_ez_radiotoggle" id="turn_LED" class="input" value="0"><#LED_switch#>
+						</label>					
 					</td>
 				</tr>
 				<tr>
@@ -2309,10 +2399,10 @@ function save_cert_key(){
 				</tr>
 
 				<tr id="https_download_cert" style="display: none;">
-					<th>Download Certificate</th>
+					<th><#Local_access_certificate_download#></th>
 					<td>
 						<input id="download_cert_btn" class="button_gen" onclick="save_cert_key();" type="button" value="<#btn_Export#>" />
-						<span id="download_cert_desc">Download and install SSL certificate on your browser to trust accessing your local domain “router.asus.com” with HTTPS protocol. To export certificate after applying setting.</span><a href="https://www.asus.com/support/FAQ/1034294" style="font-family:Lucida Console;text-decoration:underline;color:#FFCC00; margin-left: 5px;" target="_blank">FAQ</a>
+						<span id="download_cert_desc"><#Local_access_certificate_desc#></span><a href="https://www.asus.com/support/FAQ/1034294" style="font-family:Lucida Console;text-decoration:underline;color:#FFCC00; margin-left: 5px;" target="_blank">FAQ</a>
 					</td>
 				</tr>
 			</table>

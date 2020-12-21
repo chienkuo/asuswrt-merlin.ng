@@ -13,9 +13,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
-#ifdef HND_ROUTER
 #include <limits.h>
-#endif
 
 #ifdef RTCONFIG_RALINK
 #include <ralink.h>
@@ -23,6 +21,7 @@
 
 #ifdef RTCONFIG_QCA
 #include <qca.h>
+#include <sys/mman.h>
 #endif
 
 #if defined(RTCONFIG_LP5523)
@@ -32,6 +31,7 @@
 #if defined(RTCONFIG_SOC_IPQ8074)
 #include <sys/vfs.h>
 #include <inttypes.h>
+#include <sys/reboot.h>
 #endif
 
 #ifndef ARRAYSIZE
@@ -289,11 +289,22 @@ static int rctest_main(int argc, char *argv[])
 	}
 #endif
 	else if (strcmp(argv[1], "GetPhyStatus")==0) {
-		printf("Get Phy status:%d\n", GetPhyStatus(0));
+		printf("Get Phy status:%d\n", GetPhyStatus(0, NULL));
 	}
 	else if (strcmp(argv[1], "GetExtPhyStatus")==0) {
-		printf("Get Ext Phy status:%d\n", GetPhyStatus(atoi(argv[2])));
+		printf("Get Ext Phy status:%d\n", GetPhyStatus(atoi(argv[2]), NULL));
 	}
+#ifdef CONFIG_BCMWL5
+#if defined(RTCONFIG_AMAS) && defined(RTCONFIG_BHCOST_OPT)
+	else if (strcmp(argv[1], "linkrate")==0) {
+		if(argv[2]) {
+			int rate = 0;
+			rate = get_uplinkports_linkrate(argv[2]);
+			printf("portif[%s] link rate is %d\n", argv[2], rate);
+		}
+	}
+#endif
+#endif
 #ifdef HND_ROTUER
 	else if (strcmp(argv[1], "memdw")==0) {
 		const char *dws[]={"dw", argv[2]};
@@ -310,6 +321,17 @@ static int rctest_main(int argc, char *argv[])
 		mask = atoi(argv[2]);
 		TRACE_PT("debug for phy_speed %x\n", get_phy_speed(mask));
 	}
+#ifdef RTCONFIG_BCM_CLED
+	else if (strcmp(argv[1], "cled")==0) {
+		unsigned int led, mode;
+
+		led = atoi(argv[2]);
+		mode = atoi(argv[3]);
+		_dprintf("set Cled %d as %d\n", led, mode);
+		_bcm_cled_ctrl(led, mode);
+		eval("sw", "0xFF80301c", "0xc8a0");
+	}
+#endif
 #ifdef HND_ROUTER
 	else if (strcmp(argv[1], "regr")==0) {
 		unsigned int reg;
@@ -343,12 +365,14 @@ static int rctest_main(int argc, char *argv[])
 		sscanf(argv[3], "%x", &ctrl);
 		_dprintf("phy_ctrl 0x%x/%x (%d)\n", mask, ctrl, set_phy_ctrl(mask, ctrl));
 	}
+#if defined(RTCONFIG_EXT_BCM53134)
 	else if (strcmp(argv[1], "set_ex53134_ctrl")==0) {
 		unsigned int mask, ctrl;
 		sscanf(argv[2], "%x", &mask);
 		sscanf(argv[3], "%x", &ctrl);
 		_dprintf("ex53134 phy_ctrl 0x%x/%x (%d)\n", mask, ctrl, set_ex53134_ctrl(mask, ctrl));
 	}
+#endif
 #endif
 	else if (strcmp(argv[1], "lanports_ctrl")==0) {
 		int val;
@@ -371,6 +395,30 @@ static int rctest_main(int argc, char *argv[])
 		for(i=0;i<strlen(nv);i++) {
 			_dprintf(" %x", (unsigned char)*(nv+i));
 		}
+		_dprintf("\n");
+	}
+	else if (strcmp(argv[1], "phy_info")==0) {
+		phy_info_list phy_list = {0};
+		int /*ret,*/ i;
+
+		//if ((ret = GetPhyStatus(1, &phy_list)) == 1) {
+			GetPhyStatus(1, &phy_list);
+			for(i=0;i<phy_list.count;i++) {
+				fprintf(stderr, " phy_port_id=%d, label_name=%s, cap_name=%s, state=%s, link_rate=%d, duplex=%s, tx_packets=%u, rx_packets=%u, tx_bytes=%llu, rx_bytes=%llu, crc_errors=%u\n", 
+					phy_list.phy_info[i].phy_port_id,
+					phy_list.phy_info[i].label_name,
+					phy_list.phy_info[i].cap_name,
+					phy_list.phy_info[i].state,
+					phy_list.phy_info[i].link_rate,
+					phy_list.phy_info[i].duplex,
+					phy_list.phy_info[i].tx_packets,
+					phy_list.phy_info[i].rx_packets,
+					phy_list.phy_info[i].tx_bytes,
+					phy_list.phy_info[i].rx_bytes,
+					phy_list.phy_info[i].crc_errors);
+			}
+		//} else
+		//	_dprintf("GetPhyStatus failed (%d): ", ret);
 		_dprintf("\n");
 	}
 	else {
@@ -431,7 +479,7 @@ static int rctest_main(int argc, char *argv[])
 			else stop_wdg_monitor();
 		}
 #endif
-#ifdef RTCONFIG_FANCTRL
+#if defined(CONFIG_BCMWL5) && defined(RTCONFIG_FANCTRL)
 		else if (strcmp(argv[1], "phy_tempsense") == 0) {
 			if (on) start_phy_tempsense();
 			else stop_phy_tempsense();
@@ -443,7 +491,7 @@ static int rctest_main(int argc, char *argv[])
 			else stop_psta_monitor();
 		}
 #endif
-#if defined(RTCONFIG_AMAS) && (defined(RTCONFIG_BCMWL6) || defined(RTCONFIG_LANTIQ) || defined(RTCONFIG_QCA) || defined(RTCONFIG_REALTEK))
+#if defined(RTCONFIG_AMAS) && (defined(RTCONFIG_BCMWL6) || defined(RTCONFIG_LANTIQ) || defined(RTCONFIG_QCA) || defined(RTCONFIG_REALTEK) || defined(RTCONFIG_RALINK))
 		else if (strcmp(argv[1], "obd") == 0) {
 			if (on) start_obd();
 			else stop_obd();
@@ -550,6 +598,11 @@ static int rctest_main(int argc, char *argv[])
 		else if (strcmp(argv[1], "gpior") == 0) {
 			printf("%d\n", get_gpio(atoi(argv[2])));
 		}
+#if defined(RTCONFIG_HND_ROUTER_AX_6710) || defined(RTAX58U) || defined(TUFAX3000) || defined(RTAX82U) || defined(RTAX82_XD6) || defined(GSAX3000) || defined(GSAX5400)
+		else if (strcmp(argv[1], "gpio2r") == 0) {
+			printf("%d\n", get_gpio2(atoi(argv[2])));
+		}
+#endif
 #ifndef HND_ROUTER
 		else if (strcmp(argv[1], "gpiod") == 0) {
 			if (argc>=4) gpio_dir(atoi(argv[2]), atoi(argv[3]));
@@ -591,6 +644,16 @@ static int rctest_main(int argc, char *argv[])
 #ifdef RTCONFIG_ASUSCTRL
 		else if (strcmp(argv[1], "asusctrl") == 0) {
 			printf("ignore=%d, en=%d, flag=(0x%x)\n", asus_ctrl_ignore(), asus_ctrl_en(atoi(argv[2])), nvram_get_hex("asusctrl_flags"));
+		}
+#endif
+#ifdef RTCONFIG_BROOP
+		else if (strcmp(argv[1], "broop") == 0) {
+			int i, dtime = atoi(argv[2])?:10;
+
+			for(i=0; i<dtime; ++i) {
+				sleep(1);
+				_dprintf("detect broop: (%d) (max:%d)\n", i, ismax_broop());
+			}
 		}
 #endif
 		else {
@@ -637,10 +700,10 @@ char *fix_fw_name(char *orig_fw_name)
 static inline char *fix_fw_name(char *orig_fw_name) { return orig_fw_name; }
 #endif
 
-#if defined(RTCONFIG_QCA) || defined(RTCONFIG_LANTIQ)
+#if defined(RTCONFIG_QCA) || defined(RTCONFIG_LANTIQ) || defined(RTAX95Q) || defined(RTAX56_XD4) || defined(RTAX55) || defined(RTAX1800)
 /* download firmware */
 #ifndef FIRMWARE_DIR
-#if defined(RTCONFIG_QCA)
+#if defined(RTCONFIG_QCA) || defined(RTAX95Q) || defined(RTAX56_XD4) || defined(RTAX55) || defined(RTAX1800)
 #define FIRMWARE_DIR	"/lib/firmware"
 #else
 #define FIRMWARE_DIR	"/tmp"
@@ -781,6 +844,90 @@ static int del_q6mem(const char *basedir, const struct dirent *de, void *arg)
 	return 0;
 }
 
+/* Splite specified /PATH/TO/q6mem_xxx.gz as 10MB files, store them in @outdir, and then remove original one.
+ * @argv[1]:	path and filename to a Q6 crashdump, e.g., /tmp/q6mem_202008041020.gz
+ * @argv[2]:	output directory. q6mem_202008041020.gz is splited as q6mem_202008041020.gz.1, q6mem_202008041020.gz.2, etc.
+ * @return:
+ *  0:		successful
+ *  otherwise:	error
+ */
+int split_q6mem_main(int argc, char *argv[])
+{
+	int r = 0, c, ifd, ofd;
+	off_t tlen;
+	size_t map_size;
+	ssize_t len, l;
+	char *p, *q6mem_fn, *outdir;
+	char fn[sizeof("q6mem_YYYYMMDD_HHMMSS.gzXXX")];
+	char out_path[128];
+	unsigned char *ptr = NULL;
+
+	if (argc < 3)
+		return -1;
+
+	q6mem_fn = argv[1];
+	outdir = argv[2];
+	if (!q6mem_fn || *q6mem_fn == '\0' || !outdir || *outdir == '\0')
+		return -1;
+
+	if (!(p = strstr(q6mem_fn, "q6mem_")))
+		return - 2;
+
+	strlcpy(fn, p, sizeof(fn));
+	if (!(ifd = open(q6mem_fn, O_RDONLY)))
+		return -3;
+
+	if ((tlen = lseek(ifd, 0, SEEK_END)) < 0) {
+		r = -4;
+		goto exit_split_q6mem_main_1;
+	}
+
+	map_size = tlen;
+	ptr = (unsigned char *)mmap(0, map_size, PROT_READ, MAP_SHARED, ifd, 0);
+	if (ptr == (unsigned char *)MAP_FAILED) {
+		dbg("%s: Can't map %s. (%s)\n", __func__, q6mem_fn, strerror(errno));
+		r = -5;
+		goto exit_split_q6mem_main_1;
+	}
+
+	for (c = 1, len = 0; !r && tlen > 0; ++c) {
+		len = (tlen > (10L * 1048576))? 10L * 1048576 : tlen;
+		snprintf(out_path, sizeof(out_path), "%s/%s.%d", outdir, fn, c);
+		if ((ofd = creat(out_path, 0777)) == -1) {
+			dbg("%s: Can't create %s. (%s)\n", __func__, out_path, strerror(errno));
+			r = -6;
+			break;
+		}
+
+		while (len > 0) {
+			l = write(ofd, ptr, len);
+			if (l <= 0) {
+				dbg("%s: Can't write to %s, %ld remains. (%s)\n", __func__, out_path, len, strerror(errno));
+				r = -7;
+				break;
+			}
+
+			tlen -= l;
+			len -= l;
+			ptr += l;
+		}
+		close(ofd);
+		sync();
+	}
+
+	if (ptr != NULL)
+		munmap(ptr, map_size);
+
+ exit_split_q6mem_main_1:
+	close(ifd);
+
+	if (!r) {
+		unlink(q6mem_fn);
+	}
+
+	return r;
+}
+
 static int __hotplug_dump_q6mem(void)
 {
 	int ret = EINVAL;
@@ -792,7 +939,7 @@ static int __hotplug_dump_q6mem(void)
 	char path[128], ts[sizeof("YYYYMMDD_HHMMSSXXX")];
 	char gz_cmd[sizeof("gzip -c /dev/q6mem > /jffs/q6mem_XXXXXX.gz") + sizeof(ts)];
 	char dmesg_cmd[sizeof("dmesg > /jffs/dmesg_XXXXXX.txt") + sizeof(ts)];
-	char cp_cmd[sizeof("sleep 30 ; cp -f /tmp/dmesg_XXX.txt /tmp/q6mem_XXX.gz /jffs &") + 2 * sizeof(ts)];
+	char cp_cmd[sizeof("sleep 30 ; cp -f /tmp/dmesg_XXX.txt /jffs ; split_q6mem /tmp/q6mem_XXX.gz /jffs &") + 2 * sizeof(ts)];
 
 	action = getenv("ACTION");
 	devicename = getenv("DEVICENAME");
@@ -835,10 +982,24 @@ static int __hotplug_dump_q6mem(void)
 	snprintf(gz_cmd, sizeof(gz_cmd), "gzip -c /dev/%s > %s", devicename, path);
 	dbg("%s: gzip /dev/%s to %s ...\n", __func__, devicename, path);
 	system(gz_cmd);
-	system("restart_wireless &");
-	dbg("%s: gzip /dev/%s to %s done, copy it to /jffs and restart_wireless\n", __func__, devicename, path);
-	snprintf(cp_cmd, sizeof(cp_cmd), "sleep 30 ; cp -f /tmp/dmesg_%s.txt /tmp/q6mem_%s.gz /jffs &", ts, ts);
-	system(cp_cmd);
+
+	if (nvram_match("Ate_power_on_off_enable", "2")) {
+		/* move dmesg* to /jffs, splite /tmp/q6mem_*.gz as several 10MB files to /jffs then remove original one,
+		 * then, reboot DUT.
+		 */
+		snprintf(cp_cmd, sizeof(cp_cmd), "cp -f /tmp/dmesg_%s.txt /jffs ; split_q6mem /tmp/q6mem_%s.gz /jffs", ts, ts);
+		system(cp_cmd);
+		sync();
+		dbg("%s: Got Q6 crashdump in run-in mode, reboot instead!\n", __func__);
+		reboot(RB_AUTOBOOT);
+	} else {
+		system("restart_wireless &");
+		dbg("%s: gzip /dev/%s to %s done, copy it to /jffs and restart_wireless\n", __func__, devicename, path);
+
+		/* sleep 30 seconds, move dmesg* to /jffs, splite /tmp/q6mem_*.gz as several 10MB files to /jffs and then remove original one. */
+		snprintf(cp_cmd, sizeof(cp_cmd), "sleep 30 ; cp -f /tmp/dmesg_%s.txt /jffs ; split_q6mem /tmp/q6mem_%s.gz /jffs &", ts, ts);
+		system(cp_cmd);
+	}
 
 	return 0;
 }
@@ -895,7 +1056,7 @@ static int hotplug_main(int argc, char *argv[])
 			return coma_uevent();
 #endif /* LINUX_2_6_36 */
 #endif
-#if defined(RTCONFIG_QCA) || defined(RTCONFIG_LANTIQ)
+#if defined(RTCONFIG_QCA) || defined(RTCONFIG_LANTIQ) || defined(RTAX95Q) || defined(RTAX56_XD4) || defined(RTAX55) || defined(RTAX1800)
 		else if(!strcmp(argv[1], "firmware")) {
 			hotplug_firmware();
 		}
@@ -1080,7 +1241,7 @@ static const applets_t applets[] = {
 	{ "watchdog",			watchdog_main			},
 	{ "check_watchdog",		check_watchdog_main		},
 #ifdef RTCONFIG_CONNTRACK
-	{ "pctime",                     pctime_main                     },
+	{ "pctime",			pctime_main			},
 #endif
 #if ! (defined(RTCONFIG_QCA) || defined(RTCONFIG_RALINK))
 	{ "watchdog02",			watchdog02_main			},
@@ -1097,12 +1258,20 @@ static const applets_t applets[] = {
 #if defined(RTCONFIG_BCMWL6) && defined(RTCONFIG_PROXYSTA)
 	{ "psta_monitor",		psta_monitor_main		},
 #endif
-#if defined(RTCONFIG_AMAS) && (defined(RTCONFIG_BCMWL6) || defined(RTCONFIG_LANTIQ) || defined(RTCONFIG_QCA) || defined(RTCONFIG_REALTEK)) && !defined(RTCONFIG_DISABLE_REPEATER_UI)
+#if defined(RTCONFIG_NBR_RPT)
+	{ "nbr_monitor",			nbr_monitor_main			},
+#endif
+#if defined(RTCONFIG_AMAS) && (defined(RTCONFIG_BCMWL6) || defined(RTCONFIG_LANTIQ) || defined(RTCONFIG_QCA) || defined(RTCONFIG_REALTEK) || defined(RTCONFIG_RALINK))
 	{ "obd",			obd_main			},
 #endif
 #if defined(RTCONFIG_AMAS) && defined(RTCONFIG_ETHOBD)
 	{ "obd_eth",		obdeth_main				},
 	{ "obd_monitor",	obd_monitor_main			},
+#endif
+#if defined(RTCONFIG_AMAS) && defined(RTCONFIG_CFGSYNC)
+#if defined(RTCONFIG_HND_ROUTER_AX)
+	{ "rmd",			rmd_main			},
+#endif
 #endif
 #ifdef RTCONFIG_IPERF
 	{ "monitor",			monitor_main			},
@@ -1125,12 +1294,16 @@ static const applets_t applets[] = {
 #ifdef RTCONFIG_IPV6
 	{ "dhcp6c",			dhcp6c_wan			},
 #endif
+#if defined(RTCONFIG_CONCURRENTREPEATER) || defined(RTCONFIG_AMAS)
+#if defined(RTCONFIG_RALINK)
+	{ "re_wpsc",			re_wpsc_main			},
+#endif
+#endif
 #if defined(RTCONFIG_CONCURRENTREPEATER)
 #if !defined(RPAC68U)
 	{ "led_monitor",		led_monitor_main		},
 #endif
 #if defined(RTCONFIG_RALINK)
-	{ "re_wpsc",			re_wpsc_main			},
 	{ "air_monitor",		air_monitor_main		},
 #endif
 #endif
@@ -1153,7 +1326,7 @@ static const applets_t applets[] = {
 #ifdef RTCONFIG_NETOOL
 	{ "netool", 			netool_main			},
 #endif
-#if defined(RTCONFIG_RALINK) || defined(RTCONFIG_EXT_RTL8365MB) || defined(RTCONFIG_EXT_RTL8370MB)
+#if defined(RTCONFIG_RALINK) || defined(RTCONFIG_EXT_RTL8365MB) || defined(RTCONFIG_EXT_RTL8370MB) || defined(RTAX55) || defined(RTAX1800)
 	{ "rtkswitch",			config_rtkswitch		},
 #if defined(RTAC53) || defined(RTAC51UP)
 	{ "mtkswitch",			config_mtkswitch		},
@@ -1197,11 +1370,22 @@ static const applets_t applets[] = {
 	{ "firmware_enc_crc",		firmware_enc_crc_main		},
 	{ "fw_check",			fw_check_main			},
 #endif
+#if defined(RTAX82U) || defined(GSAX3000) || defined(GSAX5400)
+	{ "ledg",			ledg_main			},
+	{ "ledbtn",			ledbtn_main			},
+#endif
+#if defined(DSL_AX82U)
+	{ "ledg",			ledg_main			},
+#endif
 #ifdef BUILD_READMEM
 	{ "readmem",			readmem_main			},
 #endif
 #if defined(RTCONFIG_WIFI_QCN5024_QCN5054)
 	{ "stress_pktgen",		stress_pktgen_main		},
+#endif
+#if defined(RTCONFIG_SOC_IPQ8074)
+	{ "test_blu",			test_bl_updater_main		},
+	{ "split_q6mem",		split_q6mem_main		},
 #endif
 #ifdef RTCONFIG_HTTPS
 	{ "rsasign_check",		rsasign_check_main		},
@@ -1221,6 +1405,9 @@ static const applets_t applets[] = {
 #endif
 #ifdef RTCONFIG_AMAS
 	{ "amas_lib",		        amas_lib_main			},
+#ifdef RTCONFIG_BHCOST_OPT    
+	{ "amas_ipc",			amas_ipc_main			},
+#endif    
 #endif
 #ifdef RTCONFIG_USB_MODEM
 #ifdef RTCONFIG_INTERNAL_GOBI
@@ -1230,9 +1417,7 @@ static const applets_t applets[] = {
 #endif
 #endif
 #endif
-#if defined(RTCONFIG_TR069) || defined(RTCONFIG_AMAS)
 	{ "dhcpc_lease",		dnsmasq_script_main		},
-#endif
 #ifdef RTCONFIG_NEW_USER_LOW_RSSI
 	{ "roamast",			roam_assistant_main		},
 #endif
@@ -1245,17 +1430,30 @@ static const applets_t applets[] = {
 #ifdef RTCONFIG_LETSENCRYPT
 	{ "le_acme",				le_acme_main			},
 #endif
-#if !(defined(RTCONFIG_QCA) || defined(RTCONFIG_RALINK) || defined(RTCONFIG_REALTEK))
+#if !(defined(RTCONFIG_QCA) || defined(RTCONFIG_RALINK) || defined(RTCONFIG_REALTEK)) \
+ ||  (defined(RTCONFIG_SOC_IPQ8074))
 	{ "erp_monitor",		erp_monitor_main		},
 #endif
+#ifdef RTCONFIG_WIFI_SON
 #if defined(MAPAC2200)
 	{ "dpdt_ant",			dpdt_ant_main		},
 #endif
-#if defined(MAPAC1300) || defined(VZWAC1300)
+#endif	
+#if defined(MAPAC1300) || defined(VZWAC1300) || defined(SHAC1300)
 	{ "thermal_txpwr",		thermal_txpwr_main		},
 #endif
 #ifdef RTCONFIG_ADTBW
 	{ "adtbw",			adtbw_main		},
+#endif
+#ifdef RTCONFIG_AMAS_ADTBW
+	{ "amas_adtbw",			amas_adtbw_main              },
+#endif
+#ifdef RTCONFIG_DSL_HOST
+	{ "dsld",				dsld_main				},
+#endif	
+#if defined(RTCONFIG_QCA_PLC_UTILS) || defined(RTCONFIG_QCA_PLC2)
+	{ "restart_plc",		restart_plc_main				},
+	{ "detect_plc",			detect_plc_main					},
 #endif
 	{NULL, NULL}
 };
@@ -1487,36 +1685,39 @@ int main(int argc, char **argv)
 			printf("Error. wifimon_check should run in RE.\n");
 		return 0;
 	}
+#endif /* RTCONFIG_WIFI_SON */
 #if defined(RTCONFIG_LP5523)
 /*
  * Manual setting LP5523 leds
  * usage: lp55xx_set_led [behavior_mode] [Blue_vol] [Green_vol] [Red_vol]
  *
  * Behavior:	300~xxx(xxx please refer to lp55xx_leds_mode in shared/lp5523led.h)
- * XXX_vol:	0~255
+ * B_vol:	0~255
+ * G_vol:	0~255
+ * R_vol:	0~255
+ * Brightness:	0~100
  *
  * */
 	if (!strcmp(base, "lp55xx_set_led")) {
-		if (argv[1] && argv[2] && argv[3] && argv[4])
+		if (argv[1] && argv[2] && argv[3] && argv[4] && argv[5])
 		{
 			char tmp[32];
 			int ptb_mode=0;
 			int i=0;
+			char *p = tmp;
 
 			memset(tmp, '\0', 32);
 			while (argv[i])
 			{
-				if (i>5)
-				{
+				if (i>5) {
 					printf("Error. Enter too many parameters.\n");
 					return 0;
 				}
 
 				switch (i) {
 				case 1:
-					if (safe_atoi(argv[i])>LP55XX_END_BLINK || safe_atoi(argv[i])<LP55XX_ACT_NONE)
-					{
-						printf("Error. Set LED behavior failed. [%d - %d]\n", LP55XX_ACT_NONE, LP55XX_END_BLINK);
+					if (safe_atoi(argv[i])>LP55XX_END_BLINK || safe_atoi(argv[i])<LP55XX_END_COLOR) {
+						printf("Error. Set LED behavior failed. [%d - %d]\n", LP55XX_END_COLOR, LP55XX_END_BLINK);
 						return 0;
 					}
 
@@ -1525,16 +1726,23 @@ int main(int argc, char **argv)
 				case 2:
 				case 3:
 				case 4:
-					if (safe_atoi(argv[i])>255 || safe_atoi(argv[i])<0)
-					{
+					if (safe_atoi(argv[i])>255 || safe_atoi(argv[i])<0) {
 						printf("Error. Set LED(%d) power failed. [%d - %d]\n", i-1, 0, 255);
 						return 0;
 					}
 
 					if (i==2)
-						sprintf(tmp, "%s%s%x", tmp, safe_atoi(argv[i])<16?"0":"", safe_atoi(argv[i]));
+						p += sprintf(p, "0x%s%x", safe_atoi(argv[i])<16?"0":"", safe_atoi(argv[i]));
 					else
-						sprintf(tmp, "%s_%s%x", tmp, safe_atoi(argv[i])<16?"0":"", safe_atoi(argv[i]));
+						p += sprintf(p, "_0x%s%x", safe_atoi(argv[i])<16?"0":"", safe_atoi(argv[i]));
+
+					break;
+				case 5:
+					if (safe_atoi(argv[i])>100 || safe_atoi(argv[i])<0) {
+						printf("Error. Set Brightness(%d) failed. [%d - %d]\n", i-1, 0, 100);
+						return 0;
+					}
+					nvram_set_int("lp55xx_lp5523_user_brightness", safe_atoi(argv[i]));
 
 					break;
 				}
@@ -1547,9 +1755,10 @@ int main(int argc, char **argv)
 		}
 		else
 			printf("Error. Enter parameter failed.\n\n"
-				"Usage: lp55xx_set_led [behavior_mode] [Blue_vol] [Green_vol] [Red_vol]\n\n"
+				"Usage: lp55xx_set_led [behavior_mode] [Blue_vol] [Green_vol] [Red_vol] [Brightness] \n\n"
 				"Behavior: 300~xxx(xxx please refer to lp55xx_leds_mode in shared/lp5523led.h)\n"
-				"XXX_vol:  0~255\n");
+				"XXX_vol:  0~255\n"
+				"Brightness: 1~100\n");
 
 		return 0;
 	}
@@ -1685,7 +1894,6 @@ int main(int argc, char **argv)
 		return 0;
 	}
 #endif
-#endif /* RTCONFIG_WIFI_SON */
 
 	if (!strcmp(base, "restart_wireless")) {
 		printf("restart wireless...\n");
@@ -2105,17 +2313,26 @@ int main(int argc, char **argv)
 	}
 #endif
 #ifdef RTCONFIG_AMAS
-#if !defined(RTCONFIG_DISABLE_REPEATER_UI)
 	else if (!strcmp(base, "amas_wlcconnect")) {
 		return amas_wlcconnect_main();
 	}
 	else if (!strcmp(base, "amas_bhctrl")) {
 		return amas_bhctrl_main();
 	}
-#endif
 	else if (!strcmp(base, "amas_lanctrl")) {
 		return amas_lanctrl_main();
 	}
+#ifdef RTCONFIG_BHCOST_OPT
+	else if (!strcmp(base, "amas_status")) {
+		return amas_status_main();
+	}
+	else if (!strcmp(base, "amas_ssd")) {
+		return amas_ssd_main();
+	}
+	else if (!strcmp(base, "amas_misc")) {
+		return amas_misc_main();
+	}
+#endif    
 #endif
 #ifdef CONFIG_BCMWL5
 	else if (!strcmp(base, "setup_dnsmq")) {
@@ -2147,12 +2364,18 @@ int main(int argc, char **argv)
 		}
 	}
 	else if (!strcmp(base, "hnd-write")) {
-		if (argc >= 2) {
-			return bca_sys_upgrade(argv[1]);
-		} else {
-			_dprintf("%s@%d *** Error argc=%d\n", __FUNCTION__, __LINE__, argc);
-			return EINVAL;
-		}
+                int ret = -1;
+
+                nvram_set_int("hndwr", -100);
+                if (argc >= 2) {
+                        ret = bca_sys_upgrade(argv[1]);
+                } else {
+                        _dprintf("%s@%d *** Error argc=%d\n", __FUNCTION__, __LINE__, argc);
+                        ret = EINVAL;
+                }
+
+                nvram_set_int("hndwr", ret);
+                return ret;
 	}
 	else if (!strcmp(base, "mtd_erase_image_update")) {
 		return mtd_erase_image_update();
@@ -2361,6 +2584,12 @@ int main(int argc, char **argv)
 		start_bluetooth_service();
 		return 0;
 	}
+#if defined(RTCONFIG_BT_CONN_UART)
+	else if (!strcmp(base, "execute_bt_bscp")) {
+		execute_bt_bscp();
+		return 0;
+	}
+#endif
 #endif	/* RTCONFIG_BT_CONN */
 #if defined(RTCONFIG_RALINK) || defined(RTCONFIG_QCA)
 	else if (!strcmp(base, "dump_powertable")) {
@@ -2375,6 +2604,68 @@ int main(int argc, char **argv)
 		if (!IS_ATE_FACTORY_MODE())
 			return 0;
 		dump_txbftable();
+		return 0;
+	}
+#endif
+#ifdef RTCONFIG_EXTPHY_BCM84880
+	else if (!strcmp(base, "extphy_bit_op")) {
+		unsigned int reg, val, start_bit, end_bit, wait_ms;
+		int wr, ret;
+
+		if(argc < 2 || (strcmp(argv[1], "rd") && strcmp(argv[1], "wr")))
+			return 0;
+
+		if(argc < 3)
+			return 0;
+
+		reg = strtol(argv[2], 0, 16);
+
+		if(!strcmp(argv[1], "wr")){
+			wr = 1;
+			start_bit = wait_ms = 0;
+			end_bit = 15;
+
+			if(argc >= 4 && argc <= 7){
+				if(argc >= 4)
+					val = strtol(argv[3], 0, 16);
+				if(argc >= 5)
+					start_bit = strtol(argv[4], 0, 10);
+				if(argc >= 6)
+					end_bit = strtol(argv[5], 0, 10);
+				if(argc == 7)
+					wait_ms = strtol(argv[6], 0, 10);
+			}
+			else
+				return 0;
+		}
+		else{ // !strcmp(argv[1], "rd")
+			wr = 0;
+			val = start_bit = wait_ms = 0;
+			end_bit = 15;
+
+			if(argc >= 3 && argc <= 5){
+				if(argc >= 4)
+					start_bit = strtol(argv[3], 0, 10);
+				if(argc == 5)
+					end_bit = strtol(argv[4], 0, 10);
+			}
+			else
+				return 0;
+		}
+
+		ret = extphy_bit_op(reg, val, wr, start_bit, end_bit, wait_ms);
+
+#if defined(RTAX86U) || defined(RTAX5700)
+		if(nvram_get_int("ext_phy_model") == 1)
+			_dprintf("addr=0x%02x, reg=0x%06x, val=0x%04x\n", EXTPHY_RTL_ADDR, reg, ret);
+		else
+#endif
+			_dprintf("addr=0x%02x, reg=0x%06x, val=0x%04x\n", EXTPHY_ADDR, reg, ret);
+
+		return 0;
+	}
+	else if (!strcmp(base, "get_ext_phy_id")) {
+		get_ext_phy_id();
 		return 0;
 	}
 #endif

@@ -67,7 +67,15 @@ start_nas(void)
 	stop_nas();
 
 	if (!restore_defaults_g)
+	{
+#ifdef RTCONFIG_BRCM_HOSTAPD
+		if (!nvram_match("hapd_enable", "0")) {
+			start_hapd_wpasupp();
+			return 0;
+		} else
+#endif
 		return _eval(nas_argv, NULL, 0, &pid);
+	}
 
 	return 0;
 }
@@ -75,8 +83,14 @@ start_nas(void)
 void
 stop_nas(void)
 {
+#ifdef RTCONFIG_BRCM_HOSTAPD
+        if (!nvram_match("hapd_enable", "0")) {
+		stop_hapd_wpasupp();
+        } else
+#endif
 	killall_tk("nas");
 }
+
 #ifdef REMOVE
 void notify_nas(const char *ifname)
 {
@@ -155,6 +169,8 @@ int wlcscan_main(void)
 	char word[256]={0}, *next = NULL;
 #if defined(RTCONFIG_CONCURRENTREPEATER) && defined(RTCONFIG_MTK_REP)		
 	char wl_ifs[256]={0};
+#else
+	char wl_ifnames[32] = { 0 };
 #endif
 	int i = 0;
 #ifdef RTCONFIG_QSR10G
@@ -202,7 +218,8 @@ int wlcscan_main(void)
 		strncpy(wl_ifs,nvram_safe_get("wl_ifnames"), sizeof(wl_ifs));
 	foreach (word, wl_ifs, next)
 #else
-	foreach (word, nvram_safe_get("wl_ifnames"), next)
+	strlcpy(wl_ifnames, nvram_safe_get("wl_ifnames"), sizeof(wl_ifnames));
+	foreach (word, wl_ifnames, next)
 #endif
 	{	
 		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
@@ -296,6 +313,10 @@ _dprintf("%s: Start to run...\n", __FUNCTION__);
 			nvram_set_int("wlc_sbstate", WLC_STOPPED_REASON_AUTH_FAIL);
 		}
 		else if (ret == WLC_STATE_INITIALIZING) {
+			nvram_set_int("wlc_state", WLC_STATE_STOPPED);
+			nvram_set_int("wlc_sbstate", WLC_STOPPED_REASON_NO_SIGNAL);
+		}
+		else if (ret == WLC_STATE_STOPPED) {
 			nvram_set_int("wlc_state", WLC_STATE_STOPPED);
 			nvram_set_int("wlc_sbstate", WLC_STOPPED_REASON_NO_SIGNAL);
 		}

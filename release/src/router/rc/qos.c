@@ -1,5 +1,5 @@
  /*
- * Copyright 2019, ASUSTeK Inc.
+ * Copyright 2020, ASUSTeK Inc.
  * All Rights Reserved.
  *
  * THIS SOFTWARE IS OFFERED "AS IS", AND ASUS GRANTS NO WARRANTIES OF ANY
@@ -13,7 +13,7 @@
 	feature implement:
 	1. traditaional qos
 	2. bandwdith limiter (also for guest network)
-	3. facebook wifi     (already EOL in the end of2017)
+	3. facebook wifi     (already EOL in the end of 2017)
 	4. GeForceNow qos
 
 	NOTE:
@@ -29,6 +29,9 @@
 #include <sys/socket.h>
 #ifdef RTCONFIG_FBWIFI
 #include <fbwifi.h>
+#endif
+#ifdef RTCONFIG_BWDPI
+#include <bwdpi.h>
 #endif
 
 /*
@@ -58,6 +61,84 @@ static const char *mangle_fn_ipv6 = "/tmp/mangle_rules_ipv6";
 
 int etable_flag = 0;
 int manual_return = 0;
+
+#ifdef RTCONFIG_AMAS_WGN
+static void WGN_ifname(int i, int j, char *wl_if)
+{
+	if (nvram_get_int("re_mode") == 1) {
+		char prefix[128] = {0};
+		char tmp[128] = {0};
+		snprintf(prefix, sizeof(prefix), "wl%d.%d_", i, j);
+		sprintf(wl_if, "%s", nvram_safe_get(strcat_r(prefix, "ifname", tmp)));
+
+		QOSDBG(" wl_if=%s, prefix=%s, tmp=%s\n", wl_if, prefix, tmp);
+		return;
+	}
+	else {
+		get_wlxy_ifname(i, j, wl_if);
+		return;
+	}
+}
+
+static void WGN_subnet(const char *wgn, char *net, int len)
+{
+	char *buf = NULL, *g = NULL, *p = NULL;
+	char *wif = NULL, *sub = NULL;
+
+	g = buf = strdup(nvram_safe_get("wgn_brif_rulelist"));
+	while (g) {
+	if ((p = strsep(&g, "<")) == NULL) break;
+		if ((vstrsep(p, ">", &wif, &sub)) != 2) continue;
+		if (!strcmp(wgn, wif)) {
+			snprintf(net, len, "%s", sub);
+			break;
+		}
+	}
+	if (buf) free(buf);
+	QOSDBG(" wgn=%s, net=%s, sub=%s\n", wgn, net, sub);
+}
+
+static void add_iptables_AMAS_WGN(FILE *fn, const char *action)
+{
+	/* Setup guest network's ebtables rules */
+	int  guest_mark = GUEST_INIT_MARKNUM;
+	char wl[128] = {0}, wlv[128] = {0}, tmp[128] = {0}, *next = NULL, *next2 = NULL;
+	char prefix[32] = {0};
+	char mssid_mark[4] = {0};
+	char wl_ifname[IFNAMSIZ] = {0};
+	char *wl_if = wl_ifname;
+	int  i = 0;
+	int  j = 1;
+	char *wgn = NULL;
+	char net[20] = {0};
+
+	/*
+	example:
+	iptables -t mangle -A PREROUTING -s 192.168.102.1/24 -j MARK --set-mark 0xa
+	iptables -t mangle -A PREROUTING -s 192.168.102.1/24 -j RETURN
+	*/
+
+	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
+		snprintf(prefix, sizeof(prefix), "wl%d_", i);
+		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
+
+			if(nvram_get_int(strcat_r(wlv, "_bss_enabled", tmp)) && 
+			   nvram_get_int(strcat_r(wlv, "_bw_enabled" , tmp))) {
+				wgn = nvram_safe_get(strcat_r(wlv, "_brif", tmp));
+				WGN_subnet(wgn, net, sizeof(net));
+				snprintf(mssid_mark, sizeof(mssid_mark), "%d", guest_mark);
+				if (!strcmp(net, "")) continue;
+				fprintf(fn, "-A PREROUTING -s %s -j %s %s\n", net, action, mssid_mark);
+				fprintf(fn, "-A PREROUTING -s %s -j RETURN\n", net);
+				guest_mark++;
+			} //bss_enabled
+			j++;
+		}
+		i++; j = 1;
+	}
+}
+#endif
 
 /*
 	ip / mac / ip-range status
@@ -391,6 +472,48 @@ void add_EbtablesRules(void)
 }
 #endif
 
+void add_EbtablesRules_BW()
+{
+	if(etable_flag == 1) return;
+
+	/* Setup guest network's ebtables rules */
+	int  guest_mark = GUEST_INIT_MARKNUM;
+	char wl[128], wlv[128], tmp[128], *next, *next2;
+	char prefix[32];
+	char mssid_mark[4];
+	char wl_ifname[IFNAMSIZ];
+	char *wl_if = wl_ifname;
+	int  i = 0;
+	int  j = 1;
+	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
+		snprintf(prefix, sizeof(prefix), "wl%d_", i);
+		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
+
+			if(nvram_get_int(strcat_r(wlv, "_bss_enabled", tmp)) && 
+			   nvram_get_int(strcat_r(wlv, "_bw_enabled" , tmp))) {
+#ifdef RTCONFIG_AMAS_WGN
+				WGN_ifname(i, j, wl_if);
+#else
+				get_wlxy_ifname(i, j, wl_if);
+#endif
+				if (!strcmp(wl_if, "")) continue;
+				snprintf(mssid_mark, sizeof(mssid_mark), "%d", guest_mark);
+				eval("ebtables", "-t", "nat", "-D", "PREROUTING",  "-i", wl_if, "-j", "mark", "--set-mark", mssid_mark, "--mark-target", "ACCEPT");
+				eval("ebtables", "-t", "nat", "-D", "POSTROUTING", "-o", wl_if, "-j", "mark", "--set-mark", mssid_mark, "--mark-target", "ACCEPT");
+				eval("ebtables", "-t", "nat", "-A", "PREROUTING",  "-i", wl_if, "-j", "mark", "--set-mark", mssid_mark, "--mark-target", "ACCEPT");
+				eval("ebtables", "-t", "nat", "-A", "POSTROUTING", "-o", wl_if, "-j", "mark", "--set-mark", mssid_mark, "--mark-target", "ACCEPT");
+				guest_mark++;
+			} //bss_enabled
+			j++;
+		}
+		i++; j = 1;
+	}
+
+	etable_flag = 1;
+	QOSDBG("[BWLIT_GUEST] Create ebtables rules done.\n");
+}
+
 void del_iQosRules(void)
 {
 #ifdef CLS_ACT
@@ -448,6 +571,7 @@ static int add_qos_rules(char *pcWANIF)
 	/* action and manual_return */
 	char *action = NULL;
 	int model = get_model();
+	int evalRet;
 
 	switch (model) {
 		case MODEL_RTAC56S:
@@ -460,6 +584,16 @@ static int add_qos_rules(char *pcWANIF)
 		case MODEL_RTAC3100:
 		case MODEL_GTAC5300:
 		case MODEL_RTAC86U:
+		case MODEL_RTAX88U:
+		case MODEL_GTAX11000:
+		case MODEL_RTAX92U:
+		case MODEL_RTAX95Q:
+		case MODEL_RTAX56_XD4:
+		case MODEL_CTAX56_XD4:
+		case MODEL_RTAX58U:
+		case MODEL_RTAX55:
+		case MODEL_RTAX56U:
+		case MODEL_GTAXE11000:
 		case MODEL_RTAC1200G:
 		case MODEL_RTAC1200GP:
 #if defined(RTCONFIG_LANTIQ)
@@ -899,7 +1033,8 @@ static int add_qos_rules(char *pcWANIF)
 	fclose(fn);
 
 	chmod(mangle_fn, 0700);
-	eval("iptables-restore", (char*)mangle_fn);
+	evalRet = eval("iptables-restore", (char*)mangle_fn);
+	rule_apply_checking("qos", __LINE__, (char*)mangle_fn, evalRet);
 #ifdef RTCONFIG_IPV6
 	if (fn_ipv6 && ipv6_enabled())
 	{
@@ -920,13 +1055,13 @@ static int add_qos_rules(char *pcWANIF)
 // The definations of all partations
 // eth0 : WAN
 // 1:1  : upload (WAN egress)
-// 1:2  : LAN-to-LAN (1000000Kbits)
+// 1:2  : download   (10240000Kbits = 10Gbps)
 // 1:10 : highest
 // 1:20 : high
 // 1:30 : middle
 // 1:40 : low        (default)
 // 1:50 : lowest
-// 1:60 : LAN-to-LAN (1000000kbits)
+// 1:60 : ALL Download (WAN to LAN and LAN to LAN) (10240000kbits = 10Gbps)
 // br0  : LAN
 // 2:1  : download (WAN ingress -> LAN egress)
 // etc.
@@ -942,7 +1077,7 @@ static int start_tqos(void)
 	unsigned int rate;
 	unsigned int ceil;
 	unsigned int ibw, obw, bw;
-	unsigned int mtu;
+	int wan_mtu;
 	FILE *f;
 	int x;
 	int inuse;
@@ -953,6 +1088,7 @@ static int start_tqos(void)
 	char *qsched;
 	int overhead = 0;
 	char overheadstr[sizeof("overhead 128 linklayer ethernet")];
+	char nvmtu[sizeof("wan0_mtu")];
 
 	// judge interface by get_wan_ifname
 	// add Qos iptable rules in mangle table,
@@ -980,7 +1116,6 @@ static int start_tqos(void)
 	* the BW is set here for each class
 	*/
 
-	mtu = strtoul(nvram_safe_get("wan_mtu"), NULL, 10);
 	bw = obw;
 
 #ifdef RTCONFIG_BCMARM
@@ -1012,6 +1147,11 @@ static int start_tqos(void)
 
 	const char *wan_ifname = get_wan_ifname(wan_primary_ifunit());
 	const char *lan_ifname = nvram_safe_get("lan_ifname");
+
+	snprintf(nvmtu, sizeof (nvmtu), "wan%d_mtu", wan_primary_ifunit());
+	wan_mtu = nvram_get_int(nvmtu);
+	if (wan_mtu == 0)
+		wan_mtu = 1500;
 
 	/* Upload (WAN egress) */
 	fprintf(f,
@@ -1090,7 +1230,7 @@ static int start_tqos(void)
 			"\t$TQAUL parent 1:%d handle %d: $SCH\n"
 			"\t$TFAUL parent 1: prio %d protocol ip handle %d fw flowid 1:%d\n",
 				i, rate, ceil,
-				x, calc(bw, rate), s, burst_leaf, (i >= 6) ? 7 : (i + 1), mtu, overheadstr,
+				x, calc(bw, rate), s, burst_leaf, (i >= 6) ? 7 : (i + 1), wan_mtu, overheadstr,
 				x, x,
 				x, i + 1, x);
 	}
@@ -1167,9 +1307,9 @@ static int start_tqos(void)
 					"# download 2:1\n"
 					"\t$TCADL parent 2: classid 2:1 htb rate %ukbit ceil %ukbit %s %s\n"
 					"# download 2:2: LAN-to-LAN\n"
-					"\t$TCADL parent 2: classid 2:2 htb rate 1000000kbit ceil 1000000kbit burst 10000 cburst 10000\n"
+					"\t$TCADL parent 2: classid 2:2 htb rate 10240000kbit ceil 10240000kbit burst 10000 cburst 10000\n"
 					"# download 2:60: LAN-to-LAN\n"
-					"\t$TCADL parent 2:2 classid 2:60 htb rate 1000000kbit ceil 1000000kbit burst 10000 cburst 10000 prio 6\n"
+					"\t$TCADL parent 2:2 classid 2:60 htb rate 10240000kbit ceil 10240000kbit burst 10000 cburst 10000 prio 6\n"
 					"\t$TQADL parent 2:60 handle 60: pfifo\n"
 					"\t$TFADL parent 2: prio 6 protocol ip handle 6 fw flowid 2:60\n",
 						(nvram_get_int("qos_default") + 1) * 10,
@@ -1191,7 +1331,7 @@ static int start_tqos(void)
 				"\t$TQADL parent 2:%d handle %d: $SCH\n"
 				"\t$TFADL parent 2: prio %d protocol ip handle %d fw flowid 2:%d\n",
 					i, rate,
-					x, calc(bw, rate), burst_leaf, (i >= 6) ? 7 : (i + 1), mtu, overheadstr,
+					x, calc(bw, rate), burst_leaf, (i >= 6) ? 7 : (i + 1), wan_mtu, overheadstr,
 					x, x,
 					x, i + 1, x);
 		}
@@ -1280,6 +1420,9 @@ void stop_iQos(void)
 	nvgfn_kernel_setting(0);
 	nvgfn_mcs_isauto(0);
 #endif
+#ifdef HND_ROUTER
+	config_obw_off();
+#endif
 }
 
 static int add_bandwidth_limiter_rules(char *pcWANIF)
@@ -1288,9 +1431,10 @@ static int add_bandwidth_limiter_rules(char *pcWANIF)
 	char *buf, *g, *p;
 	char *enable, *addr, *dlc, *upc, *prio;
 	char lan_addr[32];
-	char addr_new[40], wl_ifname[IFNAMSIZ];
+	char addr_new[40];
 	int addr_type;
 	char *action = NULL;
+	int evalRet;
 
 	if ((fn = fopen(mangle_fn, "w")) == NULL) return -2;
 	del_iQosRules(); // flush all rules in mangle table
@@ -1397,45 +1541,21 @@ static int add_bandwidth_limiter_rules(char *pcWANIF)
 	}
 	free(buf);
 
+#ifdef RTCONFIG_AMAS_WGN
+	// AMAS non-RE mode
+	if (nvram_get_int("re_mode") == 0) add_iptables_AMAS_WGN(fn, action);
+#endif
+
 	fprintf(fn, "COMMIT\n");
 	fclose(fn);
 	chmod(mangle_fn, 0700);
-	eval("iptables-restore", (char*)mangle_fn);
+	evalRet = eval("iptables-restore", (char*)mangle_fn);
+	rule_apply_checking("qos", __LINE__, (char*)mangle_fn, evalRet);
 	QOSDBG("[BWLIT] Create iptables rules done.\n");
 
 	/* Setup guest network's ebtables rules */
-	int  guest_mark = GUEST_INIT_MARKNUM;
-	char wl[128], wlv[128], tmp[128], *next, *next2;
-	char prefix[32];
-	char mssid_mark[4];
-	char *wl_if = wl_ifname;
-	int  i = 0;
-	int  j = 1;
-	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
-		snprintf(prefix, sizeof(prefix), "wl%d_", i);
-		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
+	add_EbtablesRules_BW();
 
-			if(nvram_get_int(strcat_r(wlv, "_bss_enabled", tmp)) && 
-			   nvram_get_int(strcat_r(wlv, "_bw_enabled" , tmp))) {
-				
-				get_wlxy_ifname(i, j, wl_if);
-				if(get_model()==MODEL_RTAC87U && (i == 1)) {
-					if(j == 1) wl_if = "vlan4000";
-					if(j == 2) wl_if = "vlan4001";
-					if(j == 3) wl_if = "vlan4002";
-				}
-
-				snprintf(mssid_mark, sizeof(mssid_mark), "%d", guest_mark);
-				eval("ebtables", "-t", "nat", "-A", "PREROUTING",  "-i", wl_if, "-j", "mark", "--set-mark", mssid_mark, "--mark-target", "ACCEPT");
-				eval("ebtables", "-t", "nat", "-A", "POSTROUTING", "-o", wl_if, "-j", "mark", "--set-mark", mssid_mark, "--mark-target", "ACCEPT");
-				guest_mark++;
-			} //bss_enabled
-			j++;
-		}
-		i++; j = 1;
-	}
-
-	QOSDBG("[BWLIT_GUEST] Create ebtables rules done.\n");
 	return 0;
 }
 
@@ -1481,7 +1601,6 @@ static int start_bandwidth_limiter(void)
 		"TQAU=\"tc qdisc add dev $WAN\"\n"
 		"TCAU=\"tc class add dev $WAN\"\n"
 		"TFAU=\"tc filter add dev $WAN\"\n"
-		"SFQ=\"sfq perturb 10\"\n"
 		"TQA=\"tc qdisc add dev br0\"\n"
 		"TCA=\"tc class add dev br0\"\n"
 		"TFA=\"tc filter add dev br0\"\n"
@@ -1490,10 +1609,10 @@ static int start_bandwidth_limiter(void)
 		"start()\n"
 		"{\n"
 		"\t$TQA root handle 1: htb\n"
-		"\t$TCA parent 1: classid 1:1 htb rate 1024000kbit\n"
+		"\t$TCA parent 1: classid 1:1 htb rate 10240000kbit\n"
 		"\n"
 		"\t$TQAU root handle 2: htb\n"
-		"\t$TCAU parent 2: classid 2:1 htb rate 1024000kbit\n"
+		"\t$TCAU parent 2: classid 2:1 htb rate 10240000kbit\n"
 		, get_wan_ifname(wan_primary_ifunit())
 	);
 	// access router : mark 9
@@ -1584,6 +1703,7 @@ static int start_bandwidth_limiter(void)
 	
 	/* Setup guest network's bandwidth limiter */
 	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
 		snprintf(prefix, sizeof(prefix), "wl%d_", i);
 		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
 
@@ -1661,6 +1781,7 @@ static int start_bandwidth_limiter(void)
 		);
 	i = 0; j = 1;
 	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
 		snprintf(prefix, sizeof(prefix), "wl%d_", i);
 		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
 			
@@ -1715,6 +1836,146 @@ static int start_bandwidth_limiter(void)
 	return 0;
 }
 
+#ifdef RTCONFIG_AMAS_WGN
+static int start_bandwidth_limiter_AMAS_WGN(void)
+{
+	FILE *f = NULL;
+	char wl_ifname[IFNAMSIZ];
+
+	if ((f = fopen(qosfn, "w")) == NULL) return -2;
+
+	/* Start Function */
+	fprintf(f,
+		"#!/bin/sh\n"
+		"SFQ=\"sfq perturb 10\"\n"
+		"\n"
+		"start()\n"
+		"{\n"
+	);
+
+	// init guest 3: ~ 14: (12 guestnetwork), start number = 3
+	guest = 3;
+	int  guest_mark = GUEST_INIT_MARKNUM;
+	char wl[128], wlv[128], tmp[128], *next, *next2;
+	char prefix[32];
+	char *wl_if = wl_ifname;
+	int  i = 0;
+	int  j = 1;
+
+	/* Loop */
+	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
+		snprintf(prefix, sizeof(prefix), "wl%d_", i);
+		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
+			if (!nvram_pf_get_int(wlv, "_bss_enabled") ||
+			    !nvram_pf_get_int(wlv, "_bw_enabled")) {
+				j++;
+				continue;
+			}
+			WGN_ifname(i, j, wl_if);
+			QOSDBG("[BWLIT_GUEST] Processor [%s] Interface \n", wl_if);
+			if (!strcmp(wl_if, "")) continue;
+
+			fprintf(f, "\n"
+				   "\ttc qdisc del dev %s root 2>/dev/null\n", wl_if);
+			fprintf(f, "\tGUEST%d%d=%s\n", i, j, wl_if);
+			fprintf(f, "\tTQA%d%d=\"tc qdisc add dev $GUEST%d%d\"\n", i, j, i, j);
+			fprintf(f, "\tTCA%d%d=\"tc class add dev $GUEST%d%d\"\n", i, j, i, j);
+			fprintf(f, "\tTFA%d%d=\"tc filter add dev $GUEST%d%d\"\n", i, j, i, j); // 5
+			fprintf(f, "\n"
+				   "\t$TQA%d%d root handle %d: htb default %d\n", i, j, guest, guest_mark);
+			fprintf(f, "\t$TCA%d%d parent %d: classid %d:1 htb rate %skbit\n", i, j, guest, guest, nvram_pf_safe_get(wlv, "_bw_dl")); //7
+			fprintf(f, "\n"
+				   "\t$TCA%d%d parent %d:1 classid %d:%d htb rate 1kbit ceil %skbit prio %d\n", i, j, guest, guest, guest_mark, nvram_pf_safe_get(wlv, "_bw_dl"), guest_mark);
+			fprintf(f, "\t$TQA%d%d parent %d:%d handle %d: $SFQ\n", i, j, guest, guest_mark, guest_mark);
+			fprintf(f, "\t$TFA%d%d parent %d: prio %d protocol ip u32 match mark %d 0x%x flowid %d:%d\n", i, j, guest, guest_mark, guest_mark, QOS_MASK, guest, guest_mark); // 10
+			QOSDBG("[BWLIT_GUEST] create %s bandwidth limiter, qdisc=%d, class=%d\n", wl_if, guest, guest_mark);
+
+			guest++; // add guest 3: ~ 14: (12 guestnetwork)
+			guest_mark++;
+			j++;
+		}
+		i++; j = 1;
+	}
+	
+	/* Stop Function */
+	fprintf(f,
+		"}\n\n"
+		"stop()\n"
+		"{\n"
+		/* Flush ebtables */
+		"\t#ebtables -t nat -F\n\n"
+		);
+
+	/* Loop */
+	i = 0; j = 1;
+	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
+		snprintf(prefix, sizeof(prefix), "wl%d_", i);
+		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
+			if(nvram_get_int(strcat_r(wlv, "_bss_enabled", tmp)) && 
+			   nvram_get_int(strcat_r(wlv, "_bw_enabled" , tmp))) {
+				wl_if = wl_ifname;
+				WGN_ifname(i, j, wl_if);
+				if (!strcmp(wl_if, "")) continue;
+				fprintf(f, "\ttc qdisc del dev %s root 2>/dev/null\n", wl_if);
+			}
+			j++;
+		}
+		i++; j = 1;
+	}
+	
+	/* Show Function */
+	fprintf(f,
+		"}\n\n"
+		"show()\n"
+		"{\n"
+		);
+
+	/* Loop */
+	i = 0; j = 1;
+	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
+		snprintf(prefix, sizeof(prefix), "wl%d_", i);
+		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
+			if(nvram_get_int(strcat_r(wlv, "_bss_enabled", tmp)) && 
+			   nvram_get_int(strcat_r(wlv, "_bw_enabled" , tmp))) {
+				wl_if = wl_ifname;
+				WGN_ifname(i, j, wl_if);
+				if (!strcmp(wl_if, "")) continue;
+				fprintf(f, "\ttc -s -d class ls dev %s\n", wl_if);
+			}
+			j++;
+		}
+		i++; j = 1;
+	}
+	
+	/* Main Funtion */
+	fprintf(f,
+		"}\n\n"
+		"if [ $# != 1 ]; then\n"
+		"\techo \"Usage: $0 start/stop/restart\"\n"
+		"else\n"
+		"\tif [ $1 = \"start\" ]; then\n"
+		"\t\tstart\n"
+		"\telif [ $1 = \"stop\" ]; then\n"
+		"\t\tstop\n"
+		"\telif [ $1 = \"restart\" ]; then\n"
+		"\t\tstop\n"
+		"\t\tstart\n"
+		"\tfi\n"
+		"fi\n"
+		);
+
+	fclose(f);
+	chmod(qosfn, 0700);
+	eval((char *)qosfn, "start");
+	QOSDBG("[BWLIT_RE] Execute Bandwidth Limiter Done.\n");
+
+	return 0;
+}
+#endif
+
 #ifdef RTCONFIG_GEFORCENOW
 static int nvfgn_GetQoSChannelPort(char *str)
 {
@@ -1740,6 +2001,11 @@ static int start_GeForce_QoS(void)
 	FILE *f = NULL;
 	unsigned int ibw = 0, obw = 0;
 	unsigned int ibw_re = 0, obw_re = 0;
+	char *qsched;
+	int overhead = 0;
+	char overheadstr[sizeof("overhead 128 linklayer ethernet")];
+	int wan_mtu, bw;
+	char nvmtu[sizeof("wan0_mtu")];
 
 	_dprintf("[GeForce] start GeForceNow QoS ...\n");
 	ibw = strtoul(nvram_safe_get("qos_ibw"), NULL, 10);
@@ -1748,10 +2014,10 @@ static int start_GeForce_QoS(void)
 	obw_re = strtoul(nvram_safe_get("nvgfn_obw_r"), NULL, 10);
 
 	/* If this value doesn't exist or 0 or empty, will give 1Gbps as default value */
-	if (ibw == 0) ibw = 1024000;
-	if (obw == 0) obw = 1024000;
-	if (ibw_re == 0) ibw_re = 1024000;
-	if (obw_re == 0) obw_re = 1024000;
+	if (ibw == 0) ibw = 10240000;
+	if (obw == 0) obw = 10240000;
+	if (ibw_re == 0) ibw_re = 10240000;
+	if (obw_re == 0) obw_re = 10240000;
 
 	/* If this value exist and it is less then 1Mbps, will force into 1Mbps */
 	if (ibw < 1024 && ibw != 0) ibw = 1024;
@@ -1759,9 +2025,43 @@ static int start_GeForce_QoS(void)
 	if (ibw_re < 1024 && ibw_re != 0) ibw_re = 1024;
 	if (obw_re < 1024 && obw_re != 0) obw_re = 1024;
 
+	bw = obw;
+#ifdef RTCONFIG_BCMARM
+		switch(nvram_get_int("qos_sched")){
+			case 1:
+				qsched = "codel";
+				break;
+			case 2:
+				if (bw < 51200)
+					qsched = "fq_codel quantum 300 noecn";
+				else
+					qsched = "fq_codel noecn";
+				break;
+			default:
+				qsched = "sfq perturb 10";
+				break;
+		}
+
+		overhead = nvram_get_int("qos_overhead");
+#else
+		qsched = "sfq perturb 10";
+#endif
+
+		if (overhead > 0)
+			snprintf(overheadstr, sizeof(overheadstr),"overhead %d %s",
+			         overhead, nvram_get_int("qos_atm") ? "linklayer atm" : "linklayer ethernet");
+		else
+			strcpy(overheadstr, "");
+
+	snprintf(nvmtu, sizeof (nvmtu), "wan%d_mtu", wan_primary_ifunit());
+	wan_mtu = nvram_get_int(nvmtu);
+	if (wan_mtu == 0)
+		wan_mtu = 1500;
+
 	if ((f = fopen(qosfn, "w")) == NULL) return -2;
 	fprintf(f,
 		"#!/bin/sh\n"
+		"SCH='%s'\n"
 		"WAN=%s\n"
 		"LAN=%s\n"
 		"\n"
@@ -1773,6 +2073,7 @@ static int start_GeForce_QoS(void)
 		"TCA=\"tc class add dev $LAN\"\n"
 		"TFA=\"tc filter add dev $LAN\"\n"
 		"\n"
+		, qsched
 		, get_wan_ifname(wan_primary_ifunit())
 		, nvram_safe_get("lan_ifname")
 	);
@@ -1782,44 +2083,44 @@ static int start_GeForce_QoS(void)
 		"{\n"
 		"echo \"root ...\"\n"
 		"$TQA root handle 1: htb default 50\n"
-		"$TCA parent 1: classid 1:1 htb rate %ukbit\n"
+		"$TCA parent 1: classid 1:1 htb rate %ukbit %s\n"
 		"\n"
 		"$TQAU root handle 2: htb default 50\n"
-		"$TCAU parent 2: classid 2:1 htb rate %ukbit\n"
+		"$TCAU parent 2: classid 2:1 htb rate %ukbit %s\n"
 		"\n"
 		"echo \"download ...\"\n"
 		"# 1:10\n"
-		"$TCA parent 1:1 classid 1:10 htb rate %ukbit ceil %ukbit prio 1\n"
-		"$TQA parent 1:10 handle 10: $SFQ\n"
+		"$TCA parent 1:1 classid 1:10 htb rate %ukbit ceil %ukbit prio 1 quantum %u %s\n"
+		"$TQA parent 1:10 handle 10: $SCH\n"
 		"$TFA parent 1: prio 1 protocol ip handle 10 fw flowid 1:10\n"
 		"\n"
 		"# 1:20\n"
-		"$TCA parent 1:1 classid 1:20 htb rate %fkbit ceil %ukbit prio 2\n"
-		"$TQA parent 1:20 handle 20: $SFQ\n"
+		"$TCA parent 1:1 classid 1:20 htb rate %fkbit ceil %ukbit prio 2 quantum %u %s\n"
+		"$TQA parent 1:20 handle 20: $SCH\n"
 		"$TFA parent 1: prio 2 protocol ip handle 20 fw flowid 1:20\n"
 		"\n"
 		"# 1:30\n"
-		"$TCA parent 1:1 classid 1:30 htb rate %fkbit ceil %ukbit prio 3\n"
-		"$TQA parent 1:30 handle 30: $SFQ\n"
+		"$TCA parent 1:1 classid 1:30 htb rate %fkbit ceil %ukbit prio 3 quantum %u %s\n"
+		"$TQA parent 1:30 handle 30: $SCH\n"
 		"$TFA parent 1: prio 3 protocol ip handle 30 fw flowid 1:30\n"
 		"\n"
 		"# 1:40\n"
-		"$TCA parent 1:1 classid 1:40 htb rate %fkbit ceil %ukbit prio 4\n"
-		"$TQA parent 1:40 handle 40: $SFQ\n"
+		"$TCA parent 1:1 classid 1:40 htb rate %fkbit ceil %ukbit prio 4 quantum %u %s\n"
+		"$TQA parent 1:40 handle 40: $SCH\n"
 		"$TFA parent 1: prio 4 protocol ip handle 40 fw flowid 1:40\n"
 		"\n"
 		"# 1:50\n"
-		"$TCA parent 1:1 classid 1:50 htb rate %fkbit ceil %ukbit prio 5\n"
-		"$TQA parent 1:50 handle 50: $SFQ\n"
+		"$TCA parent 1:1 classid 1:50 htb rate %fkbit ceil %ukbit prio 5 quantum %u %s\n"
+		"$TQA parent 1:50 handle 50: $SCH\n"
 		"$TFA parent 1: prio 5 protocol ip handle 50 fw flowid 1:50\n"
 		"\n"
-		, ibw             // 1:
-		, obw             // 2:
-		, ibw_re,   ibw   // 1:10
-		, 0.20*ibw, ibw   // 1:20
-		, 0.15*ibw, ibw   // 1:30
-		, 0.10*ibw, ibw   // 1:40
-		, 0.05*ibw, ibw   // 1:50
+		, ibw,      overheadstr            // 1:
+		, obw,      overheadstr            // 2:
+		, ibw_re,   ibw, wan_mtu, overheadstr  // 1:10
+		, 0.20*ibw, ibw, wan_mtu, overheadstr  // 1:20
+		, 0.15*ibw, ibw, wan_mtu, overheadstr  // 1:30
+		, 0.10*ibw, ibw, wan_mtu, overheadstr  // 1:40
+		, 0.05*ibw, ibw, wan_mtu, overheadstr  // 1:50
 	);
 
 	/* fixed ports */
@@ -1844,35 +2145,35 @@ static int start_GeForce_QoS(void)
 		"\n"
 		"echo \"upload ...\"\n"
 		"# 2:10\n"
-		"$TCAU parent 2:1 classid 2:10 htb rate %ukbit ceil %ukbit prio 1\n"
-		"$TQAU parent 2:10 handle 10: $SFQ\n"
+		"$TCAU parent 2:1 classid 2:10 htb rate %ukbit ceil %ukbit prio 1 quantum %u %s\n"
+		"$TQAU parent 2:10 handle 10: $SCH\n"
 		"$TFAU parent 2: prio 1 protocol ip handle 10 fw flowid 2:10\n"
 		"\n"
 		"# 2:20\n"
-		"$TCAU parent 2:1 classid 2:20 htb rate %fkbit ceil %ukbit prio 2\n"
-		"$TQAU parent 2:20 handle 20: $SFQ\n"
+		"$TCAU parent 2:1 classid 2:20 htb rate %fkbit ceil %ukbit prio 2 quantum %u %s\n"
+		"$TQAU parent 2:20 handle 20: $SCH\n"
 		"$TFAU parent 2: prio 2 protocol ip handle 20 fw flowid 2:20\n"
 		"\n"
 		"# 2:30\n"
-		"$TCAU parent 2:1 classid 2:30 htb rate %fkbit ceil %ukbit prio 3\n"
-		"$TQAU parent 2:30 handle 30: $SFQ\n"
+		"$TCAU parent 2:1 classid 2:30 htb rate %fkbit ceil %ukbit prio 3 quantum %u %s\n"
+		"$TQAU parent 2:30 handle 30: $SCH\n"
 		"$TFAU parent 2: prio 3 protocol ip handle 30 fw flowid 2:30\n"
 		"\n"
 		"# 2:40\n"
-		"$TCAU parent 2:1 classid 2:40 htb rate %fkbit ceil %ukbit prio 4\n"
-		"$TQAU parent 2:40 handle 40: $SFQ\n"
+		"$TCAU parent 2:1 classid 2:40 htb rate %fkbit ceil %ukbit prio 4 quantum %u %s\n"
+		"$TQAU parent 2:40 handle 40: $SCH\n"
 		"$TFAU parent 2: prio 4 protocol ip handle 40 fw flowid 2:40\n"
 		"\n"
 		"# 2:50\n"
-		"$TCAU parent 2:1 classid 2:50 htb rate %fkbit ceil %ukbit prio 5\n"
-		"$TQAU parent 2:50 handle 50: $SFQ\n"
+		"$TCAU parent 2:1 classid 2:50 htb rate %fkbit ceil %ukbit prio 5 quantum %u %s\n"
+		"$TQAU parent 2:50 handle 50: $SCH\n"
 		"$TFAU parent 2: prio 5 protocol ip handle 50 fw flowid 2:50\n"
 		"\n"
-		, obw_re  , obw   // 2:10
-		, 0.20*obw, obw   // 2:20
-		, 0.15*obw, obw   // 2:30
-		, 0.10*obw, obw   // 2:40
-		, 0.05*obw, obw   // 2:50
+		, obw_re  , obw, wan_mtu, overheadstr   // 2:10
+		, 0.20*obw, obw, wan_mtu, overheadstr   // 2:20
+		, 0.15*obw, obw, wan_mtu, overheadstr   // 2:30
+		, 0.10*obw, obw, wan_mtu, overheadstr   // 2:40
+		, 0.05*obw, obw, wan_mtu, overheadstr   // 2:50
 	);
 
 	/* fixed ports */
@@ -1951,23 +2252,358 @@ static int start_GeForce_QoS(void)
 #endif
 
 
+static int add_rog_qos_rules(char *pcWANIF)
+{
+	FILE *fn;
+#ifdef RTCONFIG_IPV6
+	FILE *fn_ipv6 = NULL;
+#endif
+	char *buf;
+	char *g;
+	char *p;
+	char wan[16];
+	char *addr;
+	int class_num;
+	char main_rule[192], end[256], end2[256];
+	char chain[sizeof("QOSOXXX")];
+	int v4v6_ok;
+	int evalRet;
+	char *action = NULL;
+	int model = get_model();
+
+	switch (model) {
+		case MODEL_RTAC56S:
+		case MODEL_RTAC68U:
+		case MODEL_RTAC87U:
+		case MODEL_RTAC3200:
+		case MODEL_DSLAC68U:
+		case MODEL_RTAC88U:
+		case MODEL_RTAC5300:
+		case MODEL_RTAC3100:
+		case MODEL_GTAC5300:
+		case MODEL_RTAC86U:
+		case MODEL_RTAX88U:
+		case MODEL_GTAX11000:
+		case MODEL_RTAX92U:
+		case MODEL_RTAX95Q:
+		case MODEL_RTAX56_XD4:
+		case MODEL_CTAX56_XD4:
+		case MODEL_RTAX58U:
+		case MODEL_RTAX55:
+		case MODEL_RTAX56U:
+		case MODEL_GTAXE11000:
+		case MODEL_RTAC1200G:
+		case MODEL_RTAC1200GP:
+		case MODEL_BLUECAVE:
+		case MODEL_DSLAX82U:
+			action = "--set-mark";
+			manual_return = 1;
+			break;
+		default:
+			action = "--set-return";
+			manual_return = 0;
+			break;
+	}
+
+	del_iQosRules(); // flush related rules in mangle table
+
+	if((fn = fopen(mangle_fn, "w")) == NULL) return -2;
+#ifdef RTCONFIG_IPV6
+	if(ipv6_enabled() && (fn_ipv6 = fopen(mangle_fn_ipv6, "w")) == NULL){
+		fclose(fn);
+		return -3;
+	}
+#endif
+
+	strlcpy(wan, get_wan_ifname(wan_primary_ifunit()), sizeof(wan));
+
+	QOSDBG("[qos] iptables START\n");
+	fprintf(fn,
+		"*mangle\n"
+		":PREROUTING ACCEPT [0:0]\n"
+		":OUTPUT ACCEPT [0:0]\n"
+		":QOSO - [0:0]\n"
+		);
+#ifdef RTCONFIG_IPV6
+	if (fn_ipv6 && ipv6_enabled())
+	fprintf(fn_ipv6,
+		"*mangle\n"
+		":PREROUTING ACCEPT [0:0]\n"
+		":OUTPUT ACCEPT [0:0]\n"
+		":QOSO - [0:0]\n"
+		);
+#endif
+
+	/* Beginning of the Rule */
+	/* device */
+	class_num = QOS_ROG_MARK_MID;
+	snprintf(chain, sizeof(chain), "QOSO");	// chain name
+	snprintf(end , sizeof(end), " -j MARK %s 0x%x/0x%x\n", action, class_num, QOS_MASK);
+	snprintf(end2, sizeof(end2), " -j RETURN\n");
+
+	g = buf = strdup(nvram_safe_get("rog_clientlist"));
+	while (g) {
+
+		if ((p = strsep(&g, "<")) == NULL) break;
+		if((vstrsep(p, ">", &addr)) != 1) continue;
+
+		v4v6_ok = IPT_V4;
+#ifdef RTCONFIG_IPV6
+		if (fn_ipv6 && ipv6_enabled())
+			v4v6_ok |= IPT_V6;
+#endif
+
+		if(strcmp(addr, "")) {
+			snprintf(main_rule, sizeof(main_rule), "-m mac --mac-source %s", addr);
+		}
+		else {
+			continue;
+		}
+
+		/* build final rule */
+		if (v4v6_ok & IPT_V4){
+			fprintf(fn, "-A %s %s %s", chain, main_rule, end);
+			if(manual_return)
+			fprintf(fn, "-A %s %s %s", chain, main_rule, end2);
+		}
+
+#ifdef RTCONFIG_IPV6
+		if (fn_ipv6 && ipv6_enabled() && (v4v6_ok & IPT_V6)){
+			fprintf(fn_ipv6, "-A %s %s %s", chain, main_rule, end);
+			if(manual_return)
+			fprintf(fn_ipv6, "-A %s %s %s", chain, main_rule, end2);
+		}
+#endif
+	}
+	free(buf);
+
+	/* Highest */
+	class_num = QOS_ROG_MARK_HIGH;
+	snprintf(end , sizeof(end), " -j MARK %s 0x%x/0x%x\n", action, class_num, QOS_MASK);
+	snprintf(main_rule , sizeof(main_rule), "-p udp -m multiport --dports 53,67,68");
+	fprintf(fn, "-A %s %s %s", chain, main_rule, end);
+	if(manual_return)
+		fprintf(fn , "-A %s %s %s\n", chain, main_rule, end2);
+	snprintf(main_rule , sizeof(main_rule), "-p 1");
+	fprintf(fn, "-A %s %s %s", chain, main_rule, end);
+	if(manual_return)
+		fprintf(fn , "-A %s %s %s\n", chain, main_rule, end2);
+
+	/* The default class */
+	class_num = QOS_ROG_MARK_LOW;
+
+	fprintf(fn, "-A %s -j MARK %s 0x%x/0x%x\n", chain, action, class_num, QOS_MASK);
+	if(manual_return)
+		fprintf(fn , "-A %s -j RETURN\n", chain);
+	fprintf(fn, "-A FORWARD -o %s -j %s\n", wan, chain);
+	fprintf(fn, "-A OUTPUT -o %s -j %s\n", wan, chain);
+
+#ifdef RTCONFIG_IPV6
+	if (fn_ipv6 && ipv6_enabled() && *wan6face) {
+		fprintf(fn_ipv6, "-A %s -j MARK %s 0x%x/0x%x\n", chain, action, class_num, QOS_MASK);
+		if(manual_return)
+			fprintf(fn_ipv6, "-A %s -j RETURN\n", chain);
+		fprintf(fn_ipv6, "-A FORWARD -o %s -j %s\n", wan6face, chain);
+		fprintf(fn_ipv6, "-A OUTPUT -o %s -j %s\n", wan6face, chain);
+	}
+#endif
+
+	fprintf(fn, "COMMIT\n");
+	fclose(fn);
+	chmod(mangle_fn, 0700);
+	evalRet = eval("iptables-restore", "-n", (char*)mangle_fn);
+	rule_apply_checking("qos_multiwan", __LINE__, (char*)mangle_fn, evalRet);
+#ifdef RTCONFIG_IPV6
+	if (fn_ipv6 && ipv6_enabled())
+	{
+		fprintf(fn_ipv6, "COMMIT\n");
+		fclose(fn_ipv6);
+		chmod(mangle_fn_ipv6, 0700);
+
+//		eval("ip6tables-restore", "-n", (char*)mangle_fn_ipv6);
+//		ipv6_qos_applied++;
+	}
+#endif
+	QOSDBG("[rog] iptables DONE!\n");
+
+	return 0;
+}
+
+static int start_rog_qos()
+{
+	FILE *f;
+	char wan[16];
+	unsigned int obw;
+	char *qsched;
+#ifdef HND_ROUTER
+	int wantype = get_dualwan_by_unit(wan_primary_ifunit());
+#endif
+	int wan_mtu, bw;
+	int overhead = 0;
+	char overheadstr[sizeof("overhead 128 linklayer ethernet")];
+	char nvmtu[sizeof("wan0_mtu")];
+
+#ifdef HND_ROUTER
+	if (wantype == WANS_DUALWAN_IF_WAN) {
+		eval((char *)qosfn, "stop");
+		config_obw();
+		nvram_set_int("fc_disable", nvram_get_int("fc_disable_force") ? 1 : 0);
+		if (nvram_get_int("fc_disable"))
+			fc_fini();
+		else
+			fc_init();
+		return 0;
+	}
+	else {
+		nvram_set_int("fc_disable", 1);
+		fc_fini();
+	}
+#endif
+
+	obw = strtoul(nvram_safe_get("qos_obw"), NULL, 10);
+	if (!obw) {
+#ifdef DSL_AX82U
+		if (is_ax5400_i1()) {
+			obw = strtoul(nvram_safe_get("qos_xobw"), NULL, 10);
+			if (!obw)
+				return -1;
+		}
+		else
+#endif
+		return -1;
+	}
+
+	bw = obw;
+
+#ifdef RTCONFIG_BCMARM
+	switch(nvram_get_int("qos_sched")){
+		case 1:
+			qsched = "codel";
+			break;
+		case 2:
+			if (bw < 51200)
+				qsched = "fq_codel quantum 300 noecn";
+			else
+				qsched = "fq_codel noecn";
+			break;
+		default:
+			qsched = "sfq perturb 10";
+			break;
+	}
+
+	overhead = nvram_get_int("qos_overhead");
+#else
+	qsched = "sfq perturb 10";
+#endif
+
+	if (overhead > 0)
+		snprintf(overheadstr, sizeof(overheadstr),"overhead %d %s",
+		         overhead, nvram_get_int("qos_atm") ? "linklayer atm" : "linklayer ethernet");
+	else
+		strcpy(overheadstr, "");
+
+	snprintf(nvmtu, sizeof (nvmtu), "wan%d_mtu", wan_primary_ifunit());
+	wan_mtu = nvram_get_int(nvmtu);
+	if (wan_mtu == 0)
+		wan_mtu = 1500;
+
+	if((f = fopen(qosfn, "w")) == NULL) return -2;
+
+	strlcpy(wan, get_wan_ifname(wan_primary_ifunit()), sizeof(wan));
+
+	/* Create top-level /tmp/qos */
+	QOSDBG("[qos] tc START!\n");
+
+	/* Egress OBW  -- set the HTB shaper (Classful Qdisc)
+	 * the BW is set here for each class
+	 */
+
+	/* WAN */
+	fprintf(f,
+		"#!/bin/sh\n"
+		"I=%s\n"
+		"SCH=\"%s\"\n"
+		"TQA=\"tc qdisc add dev $I\"\n"
+		"TCA=\"tc class add dev $I\"\n"
+		"TFA=\"tc filter add dev $I\"\n"
+		"case \"$1\" in\n"
+		"start)\n"
+		"\ttc qdisc del dev $I root 2>/dev/null\n"
+		"\t$TQA root handle 1: htb default 30\n"
+		"\t$TCA parent 1: classid 1:1 htb rate %ukbit ceil %ukbit %s\n"
+		"\t$TCA parent 1:1 classid 1:10 htb rate %ukbit ceil %ukbit prio 1 quantum %u %s\n"
+		"\t$TCA parent 1:1 classid 1:20 htb rate %ukbit ceil %ukbit prio 2 quantum %u %s\n"
+		"\t$TCA parent 1:1 classid 1:30 htb rate %ukbit ceil %ukbit prio 3 quantum %u %s\n"
+		"\t$TQA parent 1:10 handle 10: $SCH\n"
+		"\t$TQA parent 1:20 handle 20: $SCH\n"
+		"\t$TQA parent 1:30 handle 30: $SCH\n"
+		"\t$TFA parent 1: prio 10 protocol all handle %d/0x%x fw flowid 1:10\n"
+		"\t$TFA parent 1: prio 20 protocol all handle %d/0x%x fw flowid 1:20\n"
+		"\t$TFA parent 1: prio 30 protocol all handle %d/0x%x fw flowid 1:30\n"
+		, qsched
+		, wan
+		, obw, obw, overheadstr
+		, obw, obw, wan_mtu, overheadstr
+		, obw / 10, obw, wan_mtu, overheadstr
+		, obw / 100, obw, wan_mtu, overheadstr
+		, QOS_ROG_MARK_HIGH, QOS_MASK
+		, QOS_ROG_MARK_MID, QOS_MASK
+		, QOS_ROG_MARK_LOW, QOS_MASK
+		);
+
+	fputs(
+		"\t;;\n"
+		"stop)\n"
+		"\ttc qdisc del dev $I root 2>/dev/null\n"
+		"\t;;\n"
+		"*)\n"
+		"\t#---------- Upload ----------\n"
+		"\ttc -s -d filter ls dev $I\n"
+		"\ttc -s -d qdisc ls dev $I\n"
+		"\techo\n"
+		"esac\n"
+		, f);
+
+	fclose(f);
+	chmod(qosfn, 0700);
+
+	eval((char *)qosfn, "start");
+	QOSDBG("[qos] tc done!\n");
+
+	return 0;
+}
+
+
 int add_iQosRules(char *pcWANIF)
 {
 	int status = 0;
 
+#if 0
 	if (IS_AQOS()) {
 		set_codel_patch();
 	}
+#endif
 
-	if (pcWANIF == NULL || nvram_get_int("qos_enable") != 1 || nvram_get_int("qos_type") == 1) return -1;
-	
+	if (nvram_get_int("qos_enable") != 1) {
+		if (nvram_get_int("rog_enable")
+#ifdef RTCONFIG_BWDPI
+		 && !dump_dpi_support(INDEX_ADAPTIVE_QOS)
+#endif
+		)
+			return add_rog_qos_rules(pcWANIF);
+		else
+			return -1;
+	}
+
+	if (pcWANIF == NULL || nvram_get_int("qos_type") == 1) return -1;
+
 	if (IS_TQOS()) {
 		status = add_qos_rules(pcWANIF);
 	}
 	else if (IS_BW_QOS()) {
 		status = add_bandwidth_limiter_rules(pcWANIF);
 	}
-	
+
 	if (status < 0) _dprintf("[%s] status = %d\n", __FUNCTION__, status);
 
 	return status;
@@ -1976,13 +2612,32 @@ int add_iQosRules(char *pcWANIF)
 int start_iQos(void)
 {
 	int status = 0;
-	if (nvram_get_int("qos_enable") != 1 || nvram_get_int("qos_type") == 1) return -1;
+
+	if (nvram_get_int("qos_enable") != 1) {
+		if (nvram_get_int("rog_enable")
+#ifdef RTCONFIG_BWDPI
+		 && !dump_dpi_support(INDEX_ADAPTIVE_QOS)
+#endif
+		)
+			return start_rog_qos();
+		else
+			return -1;
+	}
+
+	if (nvram_get_int("qos_type") == 1) return -1;
 
 	if (IS_TQOS()) {
 		status = start_tqos();
 	}
 	else if (IS_BW_QOS()) {
-		status = start_bandwidth_limiter();
+		// AMAS non-RE mode
+		if (nvram_get_int("re_mode") == 0)
+			status = start_bandwidth_limiter();
+#ifdef RTCONFIG_AMAS_WGN
+		// AMAS RE mode
+		if (nvram_get_int("re_mode") == 1)
+			status = start_bandwidth_limiter_AMAS_WGN();
+#endif
 	}
 #ifdef RTCONFIG_GEFORCENOW
 	else if (IS_GFN_QOS()) {
@@ -2002,6 +2657,7 @@ int check_wl_guest_bw_enable()
 	int  i = 0;
 
 	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
 		snprintf(prefix, sizeof(prefix), "wl%d_", i);
 		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
 			
@@ -2022,6 +2678,7 @@ void ForceDisableWLan_bw(void)
 	int  i = 0;
 
 	foreach(wl, nvram_safe_get("wl_ifnames"), next) {
+		SKIP_ABSENT_BAND_AND_INC_UNIT(i);
 		snprintf(prefix, sizeof(prefix), "wl%d_", i);
 		foreach(wlv, nvram_safe_get(strcat_r(prefix, "vifnames", tmp)), next2) {
 			nvram_set_int(strcat_r(wlv, "_bw_enabled" , tmp), 0);
@@ -2031,6 +2688,7 @@ void ForceDisableWLan_bw(void)
 	QOSDBG("[BWLIT] ALL Guest Netwok of Bandwidth Limiter has been Didabled.\n");
 }
 
+#if 0
 #ifdef RTCONFIG_BCMARM
 void set_codel_patch(void)
 {
@@ -2061,3 +2719,4 @@ void remove_codel_patch(void)
 #endif
 #endif
 
+#endif

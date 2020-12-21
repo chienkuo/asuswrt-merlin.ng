@@ -23,8 +23,8 @@
 #include <shutils.h>
 #include <shared.h>
 #include <qca.h>
-
 extern int get_ap_mac(const char *ifname, struct iwreq *pwrq);
+extern int diff_current_bssid(int unit, char bssid_str[]);
 
 #if defined(RTCONFIG_SOC_IPQ8074)
 /* Return value of /sys/firmware/devicetree/base/soc_version_major.
@@ -33,17 +33,17 @@ extern int get_ap_mac(const char *ifname, struct iwreq *pwrq);
  */
 unsigned char get_soc_version_major(void)
 {
-#if defined(RTAX89U)
-	const unsigned char sver = 1;
-#elif defined(GTAXY16000)
+#if defined(RTAX89U) || defined(GTAXY16000)
 	const unsigned char sver = 2;
 #else
 	const unsigned char sver = 0;
 #endif
 	unsigned char v = sver;
 
-	if (f_read("/sys/firmware/devicetree/base/soc_version_major", &v, 1) <= 0)	/* 1 byte */
+	if (f_read("/sys/firmware/devicetree/base/soc_version_major", &v, 1) <= 0) {	/* 1 byte */
+		dbg("%s: can't read soc_version_major, assume it's %d\n", __func__, sver);
 		v = sver;
+	}
 
 	return v;
 }
@@ -75,8 +75,18 @@ int get_internal_ini_filename(char *ini_fn, size_t ini_fn_size)
 		return -2;
 	}
 
-	snprintf(ini_fn, ini_fn_size, "%s/%s", GLOBAL_INI_TOPDIR, ini_fn_tbl[v - 1]);
+	snprintf(ini_fn, ini_fn_size, "%s/internal/%s", GLOBAL_INI_TOPDIR, ini_fn_tbl[v - 1]);
 
+	return 0;
+}
+#elif defined(RTCONFIG_SOC_IPQ40XX)
+int get_internal_ini_filename(char *ini_fn, size_t ini_fn_size)
+{
+	return 0;
+}
+#elif defined(RTCONFIG_SOC_IPQ60XX)
+int get_internal_ini_filename(char *ini_fn, size_t ini_fn_size)
+{
 	return 0;
 }
 #else
@@ -131,6 +141,44 @@ int get_parameter_from_ini_file(const char *param_name, char *param_val, size_t 
 
 	return 0;
 }
+
+#if defined(RTCONFIG_SPF11_QSDK) || defined(RTCONFIG_SPF11_1_QSDK)
+/* Get one board/default parameter from .ini file and return it's value in string format.
+ * If board-specific parameter absent, return default parameter instead.
+ * If @param_name is replicated multi-times, first one is returned.
+ * @board_name: e.g. ap-hk_v1
+ * @param_name:
+ * @param_val:
+ * @param_val_size:
+ * @ini_fn:
+ * @return:
+ * 	0:	success
+ *  otherwise:	error
+ */
+int get_board_or_default_parameter_from_ini_file(const char *board_name, const char *param_name, char *param_val, size_t param_val_size, const char *ini_fn)
+{
+	int c, r;
+	char key_name[256];
+
+	if (!board_name || !param_name || !param_val || !param_val_size || !ini_fn)
+		return -1;
+
+	for (c = 0; c <= 1; ++c) {
+		/* e.g.
+		 * ap-hk06_v2_enable_daemon_support=0
+		 * ap-hk_v1_default_enable_daemon_support=1
+		 */
+		snprintf(key_name, sizeof(key_name), "%s_%s%s", board_name, (c == 0)? "" : "default_", param_name);
+
+		*param_val = '\0';
+		r = get_parameter_from_ini_file(key_name, param_val, param_val_size, ini_fn);
+		if (!r && *param_val != '\0')
+			break;
+	}
+
+	return 0;
+}
+#endif	/* RTCONFIG_SPF11_QSDK || RTCONFIG_SPF11_1_QSDK */
 
 /* Get one parameter from .ini file and return it's value in integer format.
  * If @param_name is replicated multi-times, first one is returned.
@@ -368,8 +416,23 @@ int get_channf(int band, const char *ifname)
  *  Operating band                       : 5GHz
  *  Current Operating class      : 0
  *  Supported Rates              : 12  18  24  36  48  72  96  108
+ *
+ * SPF11 CSU1 QSDK example:
+ * admin@RT-AX89U-4988:/tmp# wlanconfig ath0 list
+ * ADDR               AID CHAN TXRATE RXRATE RSSI MINRSSI MAXRSSI IDLE  TXSEQ  RXSEQ  CAPS XCAPS ACAPS     ERP    STATE MAXRATE(DOT11) HTCAPS   VHTCAPS ASSOCTIME    IEs   MODE RXNSS TXNSS                   PSMODE
+ * 14:dd:a9:3d:68:65    1   40 325M    433M  -61     -79     -53   24      0   65535    EP    OI NULL    0          b         541666            AWPS             gGR 00:19:28     RSN WME IEEE80211_MODE_11AC_VHT80  1 1   0  
+ *  Minimum Tx Power             : 0
+ *  Maximum Tx Power             : 0
+ *  HT Capability                        : Yes
+ *  VHT Capability                       : Yes
+ *  MU capable                   : No
+ *  SNR                          : 32
+ *  Operating band                       : 5GHz
+ *  Current Operating class      : 0
+ *  Supported Rates              : 12  18  24  36  48  72  96  108 
+ *  Max STA phymode              : IEEE80211_MODE_11AC_VHT80 
  */
-int __get_qca_sta_info_by_ifname(const char *ifname, char subunit_id, int (*handler)(const WLANCONFIG_LIST *rptr, void *arg), void *arg)
+static int __get_QCA_sta_info_by_ifname(const char *ifname, char subunit_id, int (*handler)(const WLANCONFIG_LIST *rptr, void *arg), void *arg)
 {
 #if defined(RTCONFIG_SOC_IPQ8074)
 	const int l2_offset = 91;
@@ -395,7 +458,9 @@ int __get_qca_sta_info_by_ifname(const char *ifname, char subunit_id, int (*hand
 
 		{ .key = NULL, .fmt = NULL, .var = NULL },
 	}, part2_tbl[] = {
-		/* Parse ACAPS (no data, omit) ~ IEs (maybe empty string, RSN, WME, or both). */
+		/* Parse ACAPS ~ IEs (maybe empty string, RSN, WME, or both).
+		 * ACAPS is empty on ILQ2.x ~ SPF10, is "NULL" on SPF11
+		 */
 		{ .key = "ASSOCTIME",	.fmt = "%s",	.var = &r->conn_time },
 
 		{ .key = NULL, .fmt = NULL, .var = NULL },
@@ -430,7 +495,12 @@ int __get_qca_sta_info_by_ifname(const char *ifname, char subunit_id, int (*hand
 	if ((q = strstr(line_buf, "ACAPS")) != NULL) {
 		*(q - 1) = '\0';
 		l2 = q;
+#if defined(RTCONFIG_SPF11_QSDK) || defined(RTCONFIG_SPF11_1_QSDK)
+		init_sta_info_item(q, part2_tbl);
+#else
+		/* ILQ2.x ~ SPF10 */
 		init_sta_info_item(q + strlen("ACAPS"), part2_tbl);	/* skip ACAPS due to it doesn't have data. */
+#endif
 	}
 	init_sta_info_item(line_buf, part1_tbl);
 
@@ -465,15 +535,156 @@ int __get_qca_sta_info_by_ifname(const char *ifname, char subunit_id, int (*hand
 		if (strlen(r->rxrate) >= 6)
 			strcpy(r->rxrate, "0M");
 		convert_mac_string(r->addr);
-		r->rssi += channf;
-		if (r->rssi >= 0)
-			r->rssi = -1;
+
+		/* If wlanconfig reports QCA_RSSI (0 ~ 115), adjust it with channf.
+		 * But it's not accurate as long as client bandwidth different.
+		 * If wlanconfig reports normal RSSI, negative value, don't adjust it again.
+		 */
+		if (r->rssi > 0) {
+			r->rssi += channf;
+			if (r->rssi >= 0)
+				r->rssi = -1;
+		}
 
 		handler(r, arg);
 	}
 leave:
 	pclose(fp);
 	return ret;
+}
+
+#if defined(RTCONFIG_WIGIG)
+/* Parsing "iw wlan0 station dump" result, fill WLANCONFIG_LIST, and then pass it to @handler() with @arg which is provided by caller.
+ * @ifname:	VAP interface name that is used to execute "iw @ifname station dump" command.
+ * @subunit_id:	if non-zero, copied to WLANCONFIG_LIST.subunit
+ * @handler:	handler function that will be execute for each client.
+ * return:
+ * 	0:	success
+ *  otherwise:	error
+ *
+ * ILQ1.3.7 Example: iw wlan0 station dump
+ * Station 04:ce:14:0a:21:17 (on wlan0)
+ *       rx bytes:       0
+ *       rx packets:     0
+ *       tx bytes:       0
+ *       tx packets:     0
+ *       tx failed:      0
+ *       tx bitrate:     27.5 MBit/s MCS 0
+ *       rx bitrate:     27.5 MBit/s MCS 0
+ *       connected time: 292 seconds
+ * SPF10.0 FC Example: iw wlan0 station dump
+ *  Station 04:ce:14:0b:46:12 (on wlan0)
+ *        rx bytes:       0
+ *        rx packets:     0
+ *        tx bytes:       0
+ *        tx packets:     0
+ *        tx failed:      0
+ *        rx drop misc:   0
+ *        signal:         -55 dBm
+ *        tx bitrate:     27.5 MBit/s MCS 0
+ *        rx bitrate:     27.5 MBit/s MCS 0
+ */
+static int __get_IW_sta_info_by_ifname(const char *ifname, char subunit_id, int (*handler)(const WLANCONFIG_LIST *rptr, void *arg), void *arg)
+{
+	FILE *fp;
+	int c, time_val, hr, min, sec, rssi;
+	char rate[6], line_buf[300];
+	char cmd[sizeof("iw wlan0 station dump XXXXXX")];
+	WLANCONFIG_LIST result, *r = &result;
+
+	if (!ifname || !handler)
+		return -1;
+
+	snprintf(cmd, sizeof(cmd), "iw %s station dump", get_wififname(WL_60G_BAND));
+	fp = popen(cmd, "r");
+	if (!fp)
+		return -2;
+
+	/* /sys/kernel/debug/ieee80211/phy0/wil6210/stations has client list too.
+	 * But I guess none of any another attributes exist, e.g., connection time, exist.
+	 * Thus, parsing result of "iw wlan0 station dump" instead.
+	 */
+	while (fgets(line_buf, sizeof(line_buf), fp)) {
+		if (strncmp(line_buf, "Station", 7)) {
+			continue;
+		}
+
+next_sta:
+		memset(r, 0, sizeof(*r));
+		c = sscanf(line_buf, "Station %17[0-9a-f:] %*[^\n]", r->addr);
+		if (c != 1) {
+			continue;
+		}
+		convert_mac_string(r->addr);
+		if (subunit_id)
+			r->subunit_id = subunit_id;
+		strlcpy(r->mode, "11ad", sizeof(r->mode));	/* FIXME */
+		while (fgets(line_buf, sizeof(line_buf), fp)) {
+			if (!strncmp(line_buf, "Station", 7)) {
+
+#if 0
+				dbg("[%s][%u][%u][%s][%s][%u][%s]\n",
+					r->addr, r->aid, r->chan, r->txrate, r->rxrate, r->rssi, r->mode);
+#endif
+				handler(r, arg);
+				goto next_sta;
+			} else if (strstr(line_buf, "tx bitrate:")) {
+				c = sscanf(line_buf, "%*[ \t]tx bitrate:%*[ \t]%6[0-9.]", rate);
+				if (c != 1) {
+					continue;
+				}
+				snprintf(r->txrate, sizeof(r->txrate), "%sM", rate);
+			} else if (strstr(line_buf, "rx bitrate:")) {
+				c = sscanf(line_buf, "%*[ \t]rx bitrate:%*[ \t]%6[0-9.]", rate);
+				if (c != 1) {
+					continue;
+				}
+				snprintf(r->rxrate, sizeof(r->rxrate), "%sM", rate);
+			} else if (strstr(line_buf, "connected time:")) {
+				c = sscanf(line_buf, "%*[ \t]connected time:%*[ \t]%d seconds", &time_val);
+				if (c != 1) {
+					continue;
+				}
+				hr = time_val / 3600;
+				time_val %= 3600;
+				min = time_val / 60;
+				sec = time_val % 60;
+				snprintf(r->conn_time, sizeof(r->conn_time), "%02d:%02d:%02d", hr, min, sec);
+			} else if (strstr(line_buf, "signal:")) {
+				c = sscanf(line_buf, "%*[ \t]signal:%*[ \t]%d dBm", &rssi);
+				r->rssi = rssi;
+			} else {
+				//dbg("%s: skip [%s]\n", __func__, line_buf);
+			}
+		}
+	}
+	pclose(fp);
+
+	return 0;
+}
+#endif	/* RTCONFIG_WIGIG */
+
+/* Wrapper function of QCA/IW Wireless client list parser.
+ * @ifname:	VAP interface name
+ * @subunit_id:
+ * @sta_info:	pointer to WIFI_STA_TABLE
+ * @return:
+ * 	0:	success
+ *  otherwise:	error
+ */
+int __get_qca_sta_info_by_ifname(const char *ifname, char subunit_id, int (*handler)(const WLANCONFIG_LIST *rptr, void *arg), void *arg)
+{
+#if defined(RTCONFIG_WIGIG)
+	char *vap_60g = get_wififname(WL_60G_BAND);
+
+	if (!ifname)
+		return -1;
+
+	if (!strncmp(ifname, vap_60g, strlen(vap_60g))) {
+		return __get_IW_sta_info_by_ifname(ifname, subunit_id, handler, arg);
+	} else
+#endif
+		return __get_QCA_sta_info_by_ifname(ifname, subunit_id, handler, arg);
 }
 
 /* Wrapper function of QCA Wireless client list parser.
@@ -486,13 +697,98 @@ leave:
  */
 int get_qca_sta_info_by_ifname(const char *ifname, char subunit_id, WIFI_STA_TABLE *sta_info)
 {
-	if (!ifname || !sta_info)
+#if defined(RTCONFIG_WIGIG)
+	char *vap_60g = get_wififname(WL_60G_BAND);
+
+	if (!ifname)
 		return -1;
 
-	return __get_qca_sta_info_by_ifname(ifname, subunit_id, handler_qca_sta_info, sta_info);
+	if (!strncmp(ifname, vap_60g, strlen(vap_60g))) {
+		return __get_IW_sta_info_by_ifname(ifname, subunit_id, handler_qca_sta_info, sta_info);
+	} else
+#endif
+		return __get_QCA_sta_info_by_ifname(ifname, subunit_id, handler_qca_sta_info, sta_info);
 }
 
 #ifdef RTCONFIG_AMAS
+/**
+ * @brief add beacon vise by unit and subunit
+ *
+ * @param unit band index
+ * @param subunit mssid index
+ * @param hexdata vise string
+ */
+void add_beacon_vsie_by_unit(int unit, int subunit, char *hexdata)
+{
+	// 0: Beacon
+	// 1: ProbeRequest
+	// 2: ProbeResponse
+	// 3: AuthenticationRequest
+	// 4: AuthenticationRespnse
+	// 5: AssocationRequest
+	// 6: AssociationResponse
+	// 7: ReassociationRequest
+	// 8: ReassociationResponse
+	char cmd[300];
+	int pktflag = 0x0;
+	int len = 0;
+	char *ifname = NULL;
+	char buf[50] = "wlXX.XX_ifname";
+#ifdef RTCONFIG_WIFI_SON
+	if (nvram_match("wifison_ready", "1"))
+		return;
+#endif
+	len = 3 + strlen(hexdata)/2;	/* 3 is oui's len */
+
+	if(subunit<=0)
+		ifname = get_wififname(unit);	// TODO: Should we get the band from nvram?
+	else
+	{
+		memset(buf, 0, sizeof(buf));
+                snprintf(buf, sizeof(buf), "wl%d.%d_ifname", unit, subunit);
+		ifname=nvram_safe_get(buf);
+		if(!guest_wlif(ifname)) //not guestnetwork
+			return;
+	}
+
+	//_dprintf("%s: ifname=%s\n", __func__, ifname);
+
+	if (ifname && strlen(ifname)) {
+		snprintf(cmd, sizeof(cmd), "hostapd_cli -i%s set_vsie %d DD%02X%02X%02X%02X%s",
+			ifname, pktflag, (uint8_t)len, (uint8_t)OUI_ASUS[0], (uint8_t)OUI_ASUS[1], (uint8_t)OUI_ASUS[2], hexdata);
+		_dprintf("%s: cmd=%s\n", __func__, cmd);
+		system(cmd);
+	}
+}
+
+
+/**
+ * @brief add guest vsie
+ *
+ * @param hexdata vsie string
+ */
+void add_beacon_vsie_guest(char *hexdata)
+{
+	int unit = 0, subunit = 0;
+    	char word[100], *next;
+
+    	foreach (word, nvram_safe_get("wl_ifnames"), next) {
+        	if (nvram_get_int("re_mode") == 1)  // RE
+            		subunit = 2;
+        	else  // CAP/Router
+       		     	subunit = 1;
+        	for (; subunit <=  num_of_mssid_support(unit); subunit++) 
+		{
+                        char buf[] = "wlXX.XX_ifname";
+                        memset(buf, 0, sizeof(buf));
+                        snprintf(buf, sizeof(buf), "wl%d.%d_ifname", unit, subunit);
+            		if (is_intf_up(nvram_safe_get(buf)) != -1)  // interface exist
+                		add_beacon_vsie_by_unit(unit,subunit, hexdata);
+        	}
+        	unit++;
+    	}
+}
+
 void add_beacon_vsie(char *hexdata)
 {
 	// 0: Beacon
@@ -508,6 +804,65 @@ void add_beacon_vsie(char *hexdata)
 	int pktflag = 0x0;
 	int len = 0;
 	char *ifname = NULL;
+#ifdef RTCONFIG_BHCOST_OPT
+        int unit = 0;
+        char word[100], *next;
+#endif
+
+
+
+#ifdef RTCONFIG_WIFI_SON
+	if (nvram_match("wifison_ready", "1"))
+		return;
+#endif
+	len = 3 + strlen(hexdata)/2;	/* 3 is oui's len */
+#ifdef RTCONFIG_BHCOST_OPT
+	unit=0;
+	foreach (word, nvram_safe_get("wl_ifnames"), next) 
+	{
+		ifname=get_wififname(unit);	
+	//	_dprintf("%s: wl%d_ifname=%s\n", __func__,unit, ifname);
+#else
+	ifname = get_wififname(0);	// TODO: Should we get the band from nvram?
+	//_dprintf("%s: wl0_ifname=%s\n", __func__, ifname);
+#endif
+
+	if (ifname && strlen(ifname)) {
+		snprintf(cmd, sizeof(cmd), "hostapd_cli -i%s set_vsie %d DD%02X%02X%02X%02X%s",
+			ifname, pktflag, (uint8_t)len, (uint8_t)OUI_ASUS[0], (uint8_t)OUI_ASUS[1], (uint8_t)OUI_ASUS[2], hexdata);
+		_dprintf("%s: cmd=%s\n", __func__, cmd);
+		system(cmd);
+	}
+
+#ifdef RTCONFIG_BHCOST_OPT
+		unit++;
+	}
+#endif	
+}
+
+/**
+ * @brief remove beacon vsie by unit and subunit
+ *
+ * @param unit band index
+ * @param subunit mssid index
+ * @param hexdata vsie string
+ */
+void del_beacon_vsie_by_unit(int unit, int subunit, char *hexdata)
+{
+	// 0: Beacon
+	// 1: ProbeRequest
+	// 2: ProbeResponse
+	// 3: AuthenticationRequest
+	// 4: AuthenticationRespnse
+	// 5: AssocationRequest
+	// 6: AssociationResponse
+	// 7: ReassociationRequest
+	// 8: ReassociationResponse
+	char cmd[300] = {0};
+	int pktflag = 0x0;
+	int len = 0;
+	char *ifname = NULL;
+	char buf[50] = "wlXX.XX_ifname";
 
 #ifdef RTCONFIG_WIFI_SON
 	if (nvram_match("wifison_ready", "1"))
@@ -515,16 +870,52 @@ void add_beacon_vsie(char *hexdata)
 #endif
 	len = 3 + strlen(hexdata)/2;	/* 3 is oui's len */
 
-	ifname = get_wififname(0);	// TODO: Should we get the band from nvram?
+	if(subunit<=0)
+		ifname = get_wififname(unit);	// TODO: Should we get the band from nvram?
+	else
+	{
+		memset(buf, 0, sizeof(buf));
+                snprintf(buf, sizeof(buf), "wl%d.%d_ifname", unit, subunit);
+		ifname=nvram_safe_get(buf);
+		if(!guest_wlif(ifname)) //not guestnetwork
+			return;
+	}
 
-	//_dprintf("%s: wl0_ifname=%s\n", __func__, ifname);
+	//_dprintf("%s: ifname=%s\n", __func__, ifname);
 
 	if (ifname && strlen(ifname)) {
-		snprintf(cmd, sizeof(cmd), "hostapd_cli set_vsie -i%s %d DD%02X%02X%02X%02X%s",
+		snprintf(cmd, sizeof(cmd), "hostapd_cli -i%s del_vsie %d DD%02X%02X%02X%02X%s",
 			ifname, pktflag, (uint8_t)len, (uint8_t)OUI_ASUS[0], (uint8_t)OUI_ASUS[1], (uint8_t)OUI_ASUS[2], hexdata);
 		_dprintf("%s: cmd=%s\n", __func__, cmd);
 		system(cmd);
 	}
+}
+
+
+/**
+ * @brief remove guest beacon vsie
+ *
+ * @param hexdata vsie string
+ */
+void del_beacon_vsie_guest(char *hexdata)
+{
+    	int unit = 0, subunit = 0;
+    	char word[100], *next;
+
+    	foreach (word, nvram_safe_get("wl_ifnames"), next) {
+        	if (nvram_get_int("re_mode") == 1)  // RE
+            		subunit = 2;
+        	else  // CAP/Router
+            		subunit = 1;
+        	for (; subunit <= num_of_mssid_support(unit); subunit++) {
+                        char buf[] = "wlXX.XX_ifname";
+                        memset(buf, 0, sizeof(buf));
+                        snprintf(buf, sizeof(buf), "wl%d.%d_ifname", unit, subunit);
+            		if (is_intf_up(nvram_safe_get(buf)) != -1)  // interface exist
+                		del_beacon_vsie_by_unit(unit, subunit, hexdata);
+        	}
+        	unit++;
+    	}
 }
 
 void del_beacon_vsie(char *hexdata)
@@ -542,6 +933,10 @@ void del_beacon_vsie(char *hexdata)
 	int pktflag = 0x0;
 	int len = 0;
 	char *ifname = NULL;
+#ifdef RTCONFIG_BHCOST_OPT
+        int unit = 0;
+        char word[100], *next;
+#endif
 
 #ifdef RTCONFIG_WIFI_SON
 	if (nvram_match("wifison_ready", "1"))
@@ -549,17 +944,64 @@ void del_beacon_vsie(char *hexdata)
 #endif
 	len = 3 + strlen(hexdata)/2;	/* 3 is oui's len */
 
+#ifdef RTCONFIG_BHCOST_OPT
+	unit=0;
+	foreach (word, nvram_safe_get("wl_ifnames"), next) 
+	{
+		ifname=get_wififname(unit);	
+		//_dprintf("%s: wl%d_ifname=%s\n", __func__,unit, ifname);
+#else
 	ifname = get_wififname(0);	// TODO: Should we get the band from nvram?
-
 	//_dprintf("%s: wl0_ifname=%s\n", __func__, ifname);
+#endif
 
 	if (ifname && strlen(ifname)) {
-		snprintf(cmd, sizeof(cmd), "hostapd_cli del_vsie -i%s %d DD%02X%02X%02X%02X%s",
+		snprintf(cmd, sizeof(cmd), "hostapd_cli -i%s del_vsie %d DD%02X%02X%02X%02X%s",
 			ifname, pktflag, (uint8_t)len, (uint8_t)OUI_ASUS[0], (uint8_t)OUI_ASUS[1], (uint8_t)OUI_ASUS[2], hexdata);
 		_dprintf("%s: cmd=%s\n", __func__, cmd);
 		system(cmd);
 	}
+
+#ifdef RTCONFIG_BHCOST_OPT
+		unit++;
+	}
+#endif	
 }
+
+#if defined(RTCONFIG_AMAS_WGN)
+char* get_all_lan_ifnames(void)
+{
+	char *wgn_ifnames = NULL, *lan_ifnames=NULL;
+        char word[64], *next = NULL;
+        char ath[64], *tmp = NULL;
+	char br[20],result[200];
+        if (!(wgn_ifnames = nvram_safe_get("wgn_ifnames")))
+                return NULL;
+	memset(result,0,sizeof(result));
+	strlcat(result,nvram_safe_get("lan_ifnames"),sizeof(result));
+	strlcat(result," ",sizeof(result));
+        foreach (word, wgn_ifnames, next)
+        {
+		memset(br,0,sizeof(br));
+		snprintf(br, sizeof(br), "%s_ifnames", word);
+		if((lan_ifnames = nvram_safe_get(br)) != NULL)
+		{
+        		foreach (ath, lan_ifnames, tmp)
+			{
+				if(strstr(ath,"ath"))
+				{		
+				 	if(!strncmp(ath, "ath0.", 5) || !strncmp(ath, "ath1.", 5) || !strncmp(ath, "ath2.", 5))
+						continue;
+					strlcat(result,ath,sizeof(result));
+					strlcat(result," ",sizeof(result));
+				}	
+			}	
+		}	
+        }
+	result[strlen(result)-1] = '\0';
+	return strdup(result);
+}	
+#endif
 
 /*
  * int get_psta_status(int unit)
@@ -590,11 +1032,142 @@ void Pty_stop_wlc_connect(int band)
 	set_wpa_cli_cmd(band, "disconnect", 0);
 }
 
+#ifdef RTCONFIG_BHCOST_OPT
+#if defined(RTAX89U)
+#define PORT_UNITS 11
+#elif defined(RTAC59_CD6R) || defined(RTAC59_CD6N)
+#define PORT_UNITS 6
+#else
+#define PORT_UNITS 6
+#endif
+
+//Aimesh RE: vport to eth name
+static const char *query_ifname[PORT_UNITS] = { //Aimesh RE
+#if defined(RTAX89U)
+//	P0	P1	P2	P3	P4	P5	P6	P7	P8	P9	P10
+	"eth2", "eth1", "eth0", "eth0", "eth0", "eth0", "eth0", "eth0", "eth3", "eth5", "eth4"
+#elif defined(RTAC59_CD6R) || defined(RTAC59_CD6N)
+//	P0	P1	P2	P3	P4	P5
+	NULL,   "vlan1",NULL,   NULL,   "vlan4",NULL
+#elif defined(PLAX56_XP4)
+//	P0	P1	P2	P3	P4	P5
+	"eth2",	"eth3",	"eth1",	NULL,	"eth4",	NULL
+#else
+//	P0	P1	P2	P3	P4	P5
+	NULL,   NULL,   NULL,   NULL,   NULL,   NULL
+#endif
+};
+
+void Pty_start_wlc_connect(int band, char *bssid)
+{
+	char *sta;
+
+	band = swap_5g_band(band);
+
+	if (bssid != NULL) {
+		sta = get_staifname(band);
+		if (chk_assoc(sta)==0 || diff_current_bssid(band, bssid)) {	//Restart the network with configured BSSID
+			doSystem("wpa_cli -p /var/run/wpa_supplicant-%s disable_network 0", sta);
+			doSystem("wpa_cli -p /var/run/wpa_supplicant-%s set_network 0 bssid %s", sta, bssid);
+			doSystem("wpa_cli -p /var/run/wpa_supplicant-%s enable_network 0", sta);
+			logmessage("AMAS RE", "RE: wpacli set %s's bssid as %s\n", sta, bssid);
+		}
+	}
+
+	set_wpa_cli_cmd(band, "reconnect", 0);
+
+	return;
+}
+
+/**
+ * @brief Get DFS status
+ *
+ * @param band Band
+ * @return int Status. 1: CAC 0: Idle
+ */
+int amas_dfs_status(int band)
+{
+	return 0;
+}
+
+#ifdef RTCONFIG_AMAS_ETHDETECT
+unsigned int get_uplinkports_linkrate(char *ifname)
+{
+	unsigned int link_rate = 0;
+	int vport = 0;
+
+	for (vport = 0; vport < PORT_UNITS; vport++) {
+		if (vport >= ARRAY_SIZE(query_ifname)) {
+			dbg("%s: don't know vport %d\n", __func__, vport);
+			return 0;
+		}
+		if (query_ifname[vport] != NULL && strstr(query_ifname[vport],ifname)) {
+			if (rtkswitch_Port_phyStatus(1 << vport)) //connect
+			{	
+				link_rate = rtkswitch_Port_phyLinkRate(1 << vport);
+				break;
+			}
+		}
+	}
+	
+	return link_rate;
+}
+/**
+ * @brief Get the uplinkports status
+ *
+ * @param ifname ethernet uplink ifname
+ * @return int connnected(1) or not(0)
+ */
+
+int get_uplinkports_status(char *ifname)
+{
+	int vport = 0;
+
+	for (vport = 0; vport < PORT_UNITS; vport++) {
+		if (vport >= ARRAY_SIZE(query_ifname)) {
+			dbg("%s: don't know vport %d\n", __func__, vport);
+			return 0;
+		}
+		if (query_ifname[vport] != NULL && strstr(query_ifname[vport],ifname)) {
+			if (rtkswitch_Port_phyStatus(1 << vport))
+				return 1;
+		}
+	}
+	return 0;
+}
+#else
+/**
+ * @brief Get the uplinkports status
+ *
+ * @param ifname ethernet uplink ifname
+ * @return int connnected(1) or not(0)
+ */
+int get_uplinkports_status(char *ifname)
+{
+	int wan_unit = wan_primary_ifunit();
+
+	return get_wanports_status(wan_unit);
+}
+
+unsigned int get_uplinkports_linkrate(char *ifname)
+{
+	int speed;
+	char *eth=NULL;
+	speed=0;
+	eth=nvram_safe_get("eth_ifnames");
+	if(eth && strstr(eth,ifname))
+		speed=rtkswitch_WanPort_phySpeed();
+	return speed;
+}	
+
+#endif
+#else
 void Pty_start_wlc_connect(int band)
 {
 	band = swap_5g_band(band);
 	set_wpa_cli_cmd(band, "reconnect", 0);
 }
+#endif
 
 /*
  * int Pty_get_upstream_rssi(int band)
@@ -635,53 +1208,71 @@ int Pty_get_upstream_rssi(int band)
 int get_wlan_service_status(int bssidx, int vifidx)
 {
 	int ret;
-	char athfix[8];
-
+	char athfix[8],ifname[20];
+	if (nvram_get_int("wlready") == 0)
+		return -1;
 	if(bssidx < 0 || bssidx >= MAX_NR_WL_IF || vifidx < 0 || vifidx >= MAX_NO_MSSID)
 		return -1;
+
 	if(sw_mode() == SW_MODE_AP && nvram_match("re_mode", "1")) {
-		if(vifidx == 0)
+		if(vifidx == 0) //sta
 			strcpy(athfix, get_staifname(swap_5g_band(bssidx)));
-		else
+		else if(vifidx == 1) //main ap
 			__get_wlifname(swap_5g_band(bssidx), 0, athfix);
+		else //guestnetwork or vif
+		{	
+			snprintf(ifname,sizeof(ifname), "wl%d.%d_ifname", swap_5g_band(bssidx), vifidx);
+			if(strlen(nvram_safe_get(ifname)))
+				strcpy(athfix,nvram_get(ifname));
+			else
+				return -1;
+		}			
 	}
 	else {
 		__get_wlifname(swap_5g_band(bssidx), vifidx, athfix);
 	}
+
 	ret = is_intf_up(athfix);
 	return ret;
 }
 
 void set_wlan_service_status(int bssidx, int vifidx, int enabled)
 {
+	int cfg_stat;
 	char athfix[8];
+        char tmp[20],tmp2[20];
+	if (nvram_get_int("wlready") == 0)
+                return;
 	if(bssidx < 0 || bssidx >= MAX_NR_WL_IF || vifidx < 0 || vifidx >= MAX_NO_MSSID)
 		return;
+
 	if(sw_mode() == SW_MODE_AP && nvram_match("re_mode", "1")) {
-		if(vifidx <= 0) {
+		if(vifidx <= 0) {  //for sta
 			strcpy(athfix, get_staifname(swap_5g_band(bssidx)));
 			doSystem("ifconfig %s %s", athfix, enabled?"up":"down");
 			return;
 		}
-		vifidx--;
+		if(vifidx==1)
+			vifidx--;
+	}
+	cfg_stat = nvram_get_int("cfg_alive");
+
+	if(cfg_stat)
+	{	
+		if (sw_mode() == SW_MODE_AP && nvram_match("re_mode", "1")) {
+			snprintf(tmp, sizeof(tmp), "wl%d_qca_sched", bssidx);
+			snprintf(tmp2, sizeof(tmp2), "wl%d_timesched", bssidx);
+			if(nvram_get_int(tmp2)==1 ) //wifi sched is enabled
+			{
+				if(nvram_get_int(tmp)==0) //sched is radio-off
+				{
+					//_dprintf("radio[%d] should be left to wifi-sched\n",bssidx);	
+					return; 
+				}	
+			}	
+		}	
 	}
 	set_radio(enabled, swap_5g_band(bssidx), vifidx);
-}
-
-/*
- * set_pre_sysdep_config()
- * set_post_sysdep_config()
- *
- * The two function is called before and after adding a interface to brdige.
- * For handling some parameters or procrss of the interface.
- *
- */
-void set_pre_sysdep_config(int iftype)
-{
-}
-
-void set_post_sysdep_config(int iftype)
-{
 }
 
 /*
@@ -728,6 +1319,32 @@ char *get_pap_bssid(int unit, char bssid_str[])
 	}
 
 	return bssid_str;
+}
+
+int diff_current_bssid(int unit, char bssid_str[])
+{
+	char cur_bssid[18];
+	int i,diff;
+
+	get_pap_bssid(unit, cur_bssid);
+	if (strcmp(cur_bssid, "00:00:00:00:00:00") != 0) {
+		for(i=0; i<17; i++) {
+			diff = abs((int)(*(cur_bssid+i)-*(bssid_str+i)));
+			if(diff==0 || diff==32)
+				continue;
+			else {
+				logmessage("AMAS RE", "Change %s's bssid from %s to %s\n", unit?"5G":"2G", cur_bssid, bssid_str);
+				return 1;
+			}
+
+		}
+		logmessage("AMAS RE", "Current serving-ap and the best serving-ap are the same, no restart required.\n");
+		return 0;
+	}
+	else
+		logmessage("AMAS RE", "Can not get %s's current pap bssid!!\n", unit?"5G":"2G");
+
+	return 1;
 }
 
 int wl_get_bw(int unit)
@@ -803,7 +1420,11 @@ void update_macfilter_relist(void)
 #ifdef RTCONFIG_WIFI_SON
 		if (nvram_match("wifison_ready", "1"))
 			sec = "_sec";
-#endif // WIFI_SON
+#endif
+#ifdef RTCONFIG_QCA_LBD
+		if (nvram_match("smart_connect_x", "1"))
+			sec = "_sec";
+#endif
 		sprintf(qca_mac, "%s%s", QCA_ADDMAC, sec);
 
 		foreach (word, nvram_safe_get("wl_ifnames"), next) {
@@ -986,7 +1607,7 @@ static char *get_lbd_data(int sfd, int *rlen, char *terminate)
 }
 
 /* nosteer */
-char *set_steer(char *mac,int val)
+char *set_steer(const char *mac,int val)
 {
 	int sock;
 	char outbuf[100];
