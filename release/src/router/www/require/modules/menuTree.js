@@ -43,6 +43,14 @@ define(function(){
 				]
 			}, 
 			{
+				menuName: "AiMesh",
+				index: "menu_AiMesh", 
+				tab: [
+					{url: "AiMesh.asp", tabName: "AiMesh"},
+					{url: "NULL", tabName: "__INHERIT__"}
+				]
+			},
+			{
 				menuName: "<#Guest_Network#>",
 				index: "menu_GuestNetwork",
 				tab: [
@@ -257,6 +265,7 @@ define(function(){
 					{url: "Advanced_VPNClient_Content.asp", tabName: (vpn_fusion_support) ? "<#VPN_Fusion#>" : "<#vpnc_title#>"},
 					{url: "Advanced_VPN_IPSec.asp", tabName: "IPSec"},	/* TODO: merge into VPNClient */
 					{url: "Advanced_TOR_Content.asp", tabName: "TOR"},
+					{url: "Advanced_Instant_Guard.asp", tabName: "Instant Guard"},/*untranslated*/
 					{url: "NULL", tabName: "__INHERIT__"}
 				]
 			},		
@@ -349,7 +358,7 @@ define(function(){
 					retArray.push("menu_APP");
 				}
 
-				if(!cloudsync_support && !aicloudipk_support){
+				if((!cloudsync_support && !aicloudipk_support) || nocloudsync_support){
 					retArray.push("menu_AiCloud");
 				}
 
@@ -375,6 +384,17 @@ define(function(){
 
 				if(!wtfast_support) {
 					retArray.push("menu_GameBoost");
+				}
+
+				if(!amesh_support)
+					retArray.push("menu_AiMesh");
+				else{
+					if(ameshRouter_support){
+						if(!isSwMode("rt") && !isSwMode("ap"))
+							retArray.push("menu_AiMesh");
+					}
+					else if(ameshNode_support)
+						retArray.push("menu_AiMesh");
 				}
 
 				/* Operation Mode */
@@ -496,6 +516,9 @@ define(function(){
 				if(!vpnc_support){
 					retArray.push("Advanced_VPNClient_Content.asp");
 				}
+
+				if(!isSupport("Instant_Guard"))
+					retArray.push("Advanced_Instant_Guard.asp");
 
 				if(!ParentalCtrl2_support){
 					retArray.push("ParentalControl.asp");
@@ -752,10 +775,10 @@ define(function(){
 	}
 
 	if(odmpid == "RT-N66U_C1"){
-		menuTree.list.splice(7,2);
+		menuTree.list.splice(8,2);
 	}
 	else{
-		menuTree.list.splice(5,2);
+		menuTree.list.splice(6,2);
 	}
 
 	return menuTree;

@@ -35,6 +35,10 @@
 #include <shutils.h>
 #include <rc.h>
 
+#ifdef RTCONFIG_AMAS
+#include <amas-utils.h>
+#endif
+
 /* Support for Domain Search List */
 #undef DHCP_RFC3397
 
@@ -56,7 +60,7 @@ bin2hex(char *dest, size_t size, const void *src, size_t n)
 	return dptr - dest;
 }
 
-#ifdef RTCONFIG_TR069
+#if defined(RTCONFIG_TR069) || (defined(RTCONFIG_AMAS) && defined(RTCONFIG_PRELINK))
 /* returns:
  *  NULL on NULL value or alloc error
  *  binary representation of hex value on success
@@ -140,8 +144,8 @@ struct opt_hdr {
 	unsigned char data[0];
 } __attribute__ ((__packed__));
 
-#ifdef RTCONFIG_TR069
-#ifdef RTCONFIG_TR181
+#if defined(RTCONFIG_TR069) || (defined(RTCONFIG_AMAS) && defined(RTCONFIG_PRELINK))
+#if defined(RTCONFIG_TR181) || (defined(RTCONFIG_AMAS) && defined(RTCONFIG_PRELINK))
 static struct viopt_hdr *
 viopt_get(const void *buf, size_t size, unsigned int entnum)
 {
@@ -184,6 +188,7 @@ opt_get(const void *buf, size_t size, unsigned char id)
 	return NULL;
 }
 
+#ifdef RTCONFIG_TR069
 static char
 *stropt(const struct opt_hdr *opt, char *buf)
 {
@@ -206,6 +211,7 @@ opt_add(const void *buf, size_t size, unsigned char id, void *data, unsigned cha
 
 	return 0;
 }
+#endif
 #endif
 #endif
 
@@ -312,7 +318,7 @@ bound(int renew)
 #if defined(RTCONFIG_PORT_BASED_VLAN) || defined(RTCONFIG_TAGGED_BASED_VLAN)
 	char ip_mask[sizeof("192.168.100.200/255.255.255.255XXX")];
 #endif
-#ifdef RTCONFIG_TR069
+#if defined(RTCONFIG_TR069) || (defined(RTCONFIG_AMAS) && defined(RTCONFIG_PRELINK))
 	size_t size = 0;
 #endif
 #if defined(RTCONFIG_USB_MODEM) && defined(RTCONFIG_INTERNAL_GOBI)
@@ -471,6 +477,26 @@ bound(int renew)
 		free(value);
 	}
 #endif
+#endif
+
+#if defined(RTCONFIG_AMAS) && defined(RTCONFIG_PRELINK)
+	if (nvram_match("x_Setting", "0")) {
+		int verified = 0;
+		if ((value = hex2bin(getenv("opt125"), &size))) {
+			struct viopt_hdr *viopt;
+			struct opt_hdr *hash_bundle_key_opt;
+			if ((viopt = viopt_get(value, size, htonl(2623))) &&
+			    (hash_bundle_key_opt = opt_get(viopt->data, viopt->len, 123)) && hash_bundle_key_opt->len == 20) {
+				verified = amas_verify_hash_bundle_key(hash_bundle_key_opt->data, &verified) == AMAS_RESULT_SUCCESS &&
+					   verified == 1;
+			}
+			free(value);
+		}
+		nvram_set("amas_bdl_wanstate", verified ? "1" : "2");
+#if defined(RTCONFIG_BT_CONN)
+		ble_rename_ssid();
+#endif
+	}
 #endif
 
 	// check if the ipaddr is safe to apply
@@ -645,12 +671,14 @@ leasefail(void)
 int
 udhcpc_wan(int argc, char **argv)
 {
-	_dprintf("%s:: %s\n", __FUNCTION__, argv[1] ? : "");
-
 	run_custom_script("dhcpc-event", 0, argv[1], NULL);
 
-	if (!argv[1])
+	if(argv[1] && !strstr(argv[1], "leasefail"))
+		_dprintf("%s:: %s\n", __func__, argv[1]);
+	if (!argv[1]){
+		_dprintf("%s::\n", __func__);
 		return EINVAL;
+	}
 	else if (strstr(argv[1], "deconfig"))
 		return deconfig(0);
 	else if (strstr(argv[1], "bound"))
@@ -708,6 +736,7 @@ start_udhcpc(char *wan_ifname, int unit, pid_t *ppid)
 		NULL };
 	int index = 7;		/* first NULL */
 	int len, dr_enable;
+	int dhcp_qry;
 
 	/* Use unit */
 	snprintf(prefix, sizeof(prefix), "wan%d_", unit);
@@ -720,8 +749,13 @@ start_udhcpc(char *wan_ifname, int unit, pid_t *ppid)
 	    nvram_match(strcat_r(prefix, "vpndhcp", tmp), "0"))
 		return start_zcip(wan_ifname, unit, ppid);
 
-	int dhcpc_mode = nvram_get_int("dhcpc_mode");	// default = Aggressive mode
-	if (dhcpc_mode == 0) {	// Normal mode
+	/* DHCP query frequency */
+	value = nvram_get(strcat_r(prefix, "dhcp_qry", tmp)); // new nvram with wan index
+	if (value && strlen(value))
+		dhcp_qry = atoi(value);
+	else
+		dhcp_qry = nvram_get_int("dhcpc_mode");	// default = Aggressive mode
+	if (dhcp_qry == 0) {	// Normal mode
 		/* 2 discover packets max (default 3 discover packets) */
 		dhcp_argv[index++] = "-t2";
 		/* 5 seconds between packets (default 3 seconds) */
@@ -730,7 +764,7 @@ start_udhcpc(char *wan_ifname, int unit, pid_t *ppid)
 		/* set to 160 to accomodate new timings enforced by Charter cable */
 		dhcp_argv[index++] = "-A160";
 	}
-	else if(dhcpc_mode == 2){	// Continuous mode
+	else if(dhcp_qry == 2){	// Continuous mode
 		dhcp_argv[index++] = "-t1";
 		dhcp_argv[index++] = "-T5";
 		dhcp_argv[index++] = "-A0";
@@ -1187,7 +1221,7 @@ udhcpc_lan(int argc, char **argv)
 
 #ifdef RTCONFIG_IPV6
 static int
-deconfig6(char *wan_ifname)
+deconfig6(char *wan_ifname, const int mode)
 {
 	char *lan_ifname = nvram_safe_get("lan_ifname");
 
@@ -1213,6 +1247,11 @@ deconfig6(char *wan_ifname)
 		nvram_set(ipv6_nvname("ipv6_get_domain"), "");
 		if (nvram_get_int(ipv6_nvname("ipv6_dnsenable")))
 			update_resolvconf();
+	}
+
+	if(mode == 1)
+	{
+		notify_rc("restart_ddns");
 	}
 
 	return 0;
@@ -1329,6 +1368,7 @@ skip:
 #endif
 	}
 
+	notify_rc("restart_ddns");
 	return 0;
 }
 
@@ -1369,10 +1409,12 @@ int dhcp6c_wan(int argc, char **argv)
 
 	if (!argv[1] || !argv[2])
 		return EINVAL;
-	else if (strcmp(argv[2], "started") == 0 ||
-		 strcmp(argv[2], "stopped") == 0 ||
-		 strcmp(argv[2], "unbound") == 0)
-		return deconfig6(argv[1]);
+	else if (strcmp(argv[2], "started") == 0)
+		return deconfig6(argv[1], 0);
+	else if ( strcmp(argv[2], "stopped") == 0)
+		return deconfig6(argv[1], 1);
+	else if ( strcmp(argv[2], "unbound") == 0)
+		return deconfig6(argv[1], 2);		
 	else if (strcmp(argv[2], "bound") == 0)
 		return bound6(argv[1], 1);
 	else if (strcmp(argv[2], "updated") == 0 ||

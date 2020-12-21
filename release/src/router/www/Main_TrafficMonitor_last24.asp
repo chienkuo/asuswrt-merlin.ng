@@ -18,11 +18,11 @@
 <script language="JavaScript" type="text/javascript" src="/tmmenu.js"></script>
 <script language="JavaScript" type="text/javascript" src="/tmcal.js"></script>
 <script language="JavaScript" type="text/javascript" src="/popup.js"></script>
+<script language="JavaScript" type="text/javascript" src="/js/jquery.js"></script>
+<script language="JavaScript" type="text/javascript" src="/js/httpApi.js"></script>
 
 <script type='text/javascript'>
-
-<% backup_nvram("wan_ifname,lan_ifname,wl_ifname,wan_proto,web_svg,rstats_enable,rstats_colors,cstats_enable"); %>
-
+var nvram = httpApi.nvramGet(["wan_ifname", "lan_ifname", "wl_ifname", "wan_proto", "web_svg", "rstats_enable", "rstats_colors", "bond_wan", "rc_support", "http_id", "cstats_enable"])
 var cprefix = 'bw_24';
 var updateInt = 30;
 var updateDiv = updateInt;
@@ -332,7 +332,7 @@ function setUnit(unit){
 					<tr>
 						<td>
 							<div style="display:flex;align-items: center;margin: 4px 0;">
-								<div><#Statistic_show_type#></div>
+								<div><#Scale#></div>
 								<div style="margin-left: 24px;">
 									<select class="input_option" id="traffic_unit" onchange="setUnit(this.value);">
 										<option value="0">KB</option>

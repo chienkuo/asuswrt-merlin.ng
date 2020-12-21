@@ -190,6 +190,12 @@ var iptvObj = {
 	"switch_wantag": ""
 }
 
+var wanDhcpOptionObj = {
+	"wan_vendorid": "",
+	"wan_clientid_type": "",
+	"wan_clientid": ""
+}
+
 var iptvManualObj = {
 	"switch_wan0tagid": "",
 	"switch_wan0prio": "",
@@ -246,6 +252,7 @@ var systemVariable = {
 	},
 	"isNewFw": 0,
 	"newFwVersion": "",
+	"forceLevel": "",
 	"papList": [],
 	"papListAiMesh": [],
 	"selectedAP": {},
@@ -265,7 +272,12 @@ var systemVariable = {
 		"wlcStatus": {}
 	},
 	"wanOption": false,
-	"skipAiMeshOptionPage": false
+	"interval_status": false,
+	"modelCloudIcon": [],
+	"onboardingInfo": {},
+	"skipAiMeshOptionPage": false,
+	"amas_newWindow_addNode": false,
+	"authModePostData": {}
 }
 
 var aimeshObj = {
@@ -277,7 +289,7 @@ var boostKeyObj = {
 }
 
 var axModeObj = {
-	"wl0_he_features": "3",
-	"wl1_he_features": "7",
-	"wl2_he_features": "7"
+	"wl0_11ax": "1",
+	"wl1_11ax": "1",
+	"wl2_11ax": "1"
 }

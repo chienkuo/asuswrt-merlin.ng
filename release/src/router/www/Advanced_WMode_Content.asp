@@ -12,13 +12,6 @@
 <link rel="stylesheet" type="text/css" href="index_style.css"> 
 <link rel="stylesheet" type="text/css" href="form_style.css">
 <style>
-#pull_arrow{
- 	float:center;
- 	cursor:pointer;
- 	border:2px outset #EFEFEF;
- 	background-color:#CCC;
- 	padding:3px 2px 4px 0px;
-}
 #WDSAPList{
 	border:1px outset #999;
 	background-color:#576D73;
@@ -119,9 +112,13 @@ function initial(){
 		document.getElementById("wl_unit_field").style.display = "none";
 	}
 	
-	if(wl_info.band5g_2_support){
+	if(wl_info.band5g_2_support || wl_info.band6g_support){
+		if(band6g_support){
+			document.getElementById("5g2_title").innerHTML = "6 GHz MAC";
+		}
+
 		document.getElementById("wl_5g_mac_2").style.display = "";
-		document.getElementById("wl_5g_mac_th1").innerHTML = "5GHz-1 MAC";
+		document.getElementById("wl_5g_mac_th1").innerHTML = "5 GHz-1 MAC";
 	}
 
 	$("#redirect_to_setup")
@@ -463,19 +460,19 @@ function checkWLReady(){
 										</tr>
 										</thead>		  
 										<tr id="wl_2g_mac">
-											<th>2.4GHz MAC</th>
+											<th>2.4 GHz MAC</th>
 											<td>
 												<input type="text" maxlength="17" class="input_20_table" id="wl0_hwaddr" name="wl0_hwaddr" value="<% nvram_get("wl0_hwaddr"); %>" readonly autocorrect="off" autocapitalize="off">
 											</td>		
 										</tr>					
 										<tr id="wl_5g_mac">
-											<th id="wl_5g_mac_th1">5GHz MAC</th>
+											<th id="wl_5g_mac_th1">5 GHz MAC</th>
 											<td>
 												<input type="text" maxlength="17" class="input_20_table" id="wl1_hwaddr" name="wl1_hwaddr" value="<% nvram_get("wl1_hwaddr"); %>" readonly autocorrect="off" autocapitalize="off">
 											</td>		
 										</tr>	
 										<tr id="wl_5g_mac_2" style="display:none">
-											<th>5GHz-2 MAC</th>
+											<th id="5g2_title">5 GHz-2 MAC</th>
 											<td>
 												<input type="text" maxlength="17" class="input_20_table" id="wl2_hwaddr" name="wl2_hwaddr" value="<% nvram_get("wl2_hwaddr"); %>" readonly autocorrect="off" autocapitalize="off">
 											</td>		
@@ -483,10 +480,7 @@ function checkWLReady(){
 										<tr id="wl_unit_field">
 											<th><#Interface#></th>
 											<td>
-												<select name="wl_unit" class="input_option" onChange="change_wl_unit();">
-													<option class="content_input_fd" value="0" <% nvram_match("wl_unit", "0","selected"); %>>2.4GHz</option>
-													<option class="content_input_fd" value="1"<% nvram_match("wl_unit", "1","selected"); %>>5GHz</option>
-												</select>			
+												<select name="wl_unit" class="input_option" onChange="change_wl_unit();"></select>			
 											</td>
 										</tr>
 										<tr id="repeaterModeHint" style="display:none;">

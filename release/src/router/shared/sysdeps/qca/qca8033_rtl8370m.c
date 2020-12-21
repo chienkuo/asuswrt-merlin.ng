@@ -399,7 +399,7 @@ static char conv_speed(unsigned int link, unsigned int speed)
 
 	return ret;
 }
-void ATE_port_status(void)
+void ATE_port_status(phy_info_list *list)
 {
 	int i, fd;
 	char buf[64];
@@ -548,4 +548,23 @@ void __pre_config_switch(void)
 			eval("ifconfig", bif, "up");
 		}
 	}
+}
+
+/* Return wan unit of upstream port for IPTV.
+ * This function must same wan unit that returned by get_wan_base_if()!
+ * @return:	wan unit of upstream port of IPTV.
+ */
+int __get_upstream_wan_unit(void)
+{
+	int i, wanif_type, unit = -1;
+
+	for (i = WAN_UNIT_FIRST; unit < 0 && i < WAN_UNIT_MAX; ++i) {
+		wanif_type = get_dualwan_by_unit(i);
+		if (wanif_type != WANS_DUALWAN_IF_LAN)
+			continue;
+
+		unit = i;
+	}
+
+	return unit;
 }

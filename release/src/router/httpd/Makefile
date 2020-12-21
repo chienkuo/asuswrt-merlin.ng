@@ -107,7 +107,8 @@ endif
 ifeq ($(RTCONFIG_CAPTCHA),y)
 CFLAGS += -DCAPTCHA
 endif
-OBJS += httpd.o cgi.o ej.o
+
+OBJS = httpd.o cgi.o ej.o
 OBJS += web.o common.o nvram_f.o
 OBJS += aspbw.o initial_web_hook.o
 OBJS += apps.o
@@ -159,9 +160,9 @@ endif
 
 OBJS += $(if $(wildcard web_hook.c), web_hook.o, prebuild/web_hook.o)
 
-LIBS = -L$(TOP)/nvram${BCMEX}$(EX7) -lnvram -L$(TOP)/shared -lshared
+LIBS = -L$(TOP_PLATFORM)/nvram${BCMEX}$(EX7) -lnvram -L$(TOP)/shared -lshared
 ifeq ($(HND_ROUTER),y)
-LIBS += -L$(TOP)/wlcsm -lwlcsm
+LIBS += -L$(TOP_PLATFORM)/wlcsm -lwlcsm
 endif
 
 # for ceil()
@@ -180,6 +181,12 @@ endif
 ifeq ($(RTCONFIG_BCMARM),y)
 CFLAGS += -I$(SRCBASE)/shared/bcmwifi/include -DTYPEDEF_FLOAT_T
 CFLAGS += -I$(SRCBASE)/common/include
+ifeq ($(HND_ROUTER_AX),y)
+CFLAGS += -DWL11AC_80P80 -DWL11AC_160
+CFLAGS += -I$(SRCBASE)/../components/wlioctl/include -I$(SRCBASE)/../components/proto/include
+CFLAGS += -I$(SRCBASE)/wl/sys
+CFLAGS += -I$(SRCBASE)/../../43684/src/wl/sys
+endif
 LIBS += -lgcc_s
 ifeq ($(RTCONFIG_QTN),y)
 CFLAGS += -I$(TOP)/libqcsapi_client -I$(TOP)/shared/sysdeps/qtn
@@ -273,9 +280,7 @@ endif
 
 ifeq ($(RTCONFIG_LETSENCRYPT),y)
 CFLAGS  += -I$(TOP)/libletsencrypt
-ifneq ($(RTCONFIG_OPENSSL11),y) # Kludge, library still uses 1.0.2
 LIBS += -L$(TOP)/libletsencrypt -lletsencrypt
-endif
 endif
 
 ifeq ($(RTCONFIG_PERMISSION_MANAGEMENT),y)
@@ -344,10 +349,10 @@ size: httpd
 ifneq ($(wildcard ./prebuild/),)
 ifeq ($(RTCONFIG_HTTPS),y)
 pwenc.o:
-	@-cp -f ./prebuild/pwenc.o pwenc.o
+	@-cp -f ./prebuild/pwenc.o .
 endif
 web_hook.o:
-	@-cp -f ./prebuild/web_hook.o web_hook.o
+	@-cp -f ./prebuild/web_hook.o .
 endif
 
 %.o: %.c .%.depend

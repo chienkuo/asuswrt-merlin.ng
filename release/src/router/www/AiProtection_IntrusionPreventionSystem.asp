@@ -95,9 +95,6 @@ window.onresize = function() {
 		cal_panel_block("erase_confirm", 0.25);
 	}
 }
-<% get_AiDisk_status(); %>
-var AM_to_cifs = get_share_management_status("cifs");  // Account Management for Network-Neighborhood
-var AM_to_ftp = get_share_management_status("ftp");  // Account Management for FTP
 
 var ctf_disable = '<% nvram_get("ctf_disable"); %>';
 var ctf_fa_mode = '<% nvram_get("ctf_fa_mode"); %>';
@@ -560,6 +557,12 @@ function recountHover(flag){
 function eraseDatabase(){
 	document.form.action_script.value = 'reset_vp_db';
 	document.form.action_wait.value = "1";
+
+	/* update current timestamp when delete database */
+	var t = new Date();
+	var timestamp = t.getTime();
+	document.form.wrs_vp_t.value = timestamp.toString().substring(0, 10);
+
 	applyRule();
 }
 
@@ -785,7 +788,7 @@ var download = function(content, fileName, mimeType) {
 											</div>
 										</div>
 									</div>
-									<div style="width:135px;height:55px;margin: 10px 0 0 600px;background-image:url('images/New_ui/tm_logo_power.png');"></div>
+									<div style="width:96px;height:44px;margin: 10px 0 0 600px;background-image:url('images/New_ui/TrendMirco_logo.svg');background-size: 100%;"></div>
 								</td>
 							</tr>
 							</tbody>	
